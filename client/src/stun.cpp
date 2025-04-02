@@ -3,16 +3,25 @@
 #include <iostream>
 #include <sodium/randombytes.h>
 
-std::optional<PublicAddress> get_public_address()
+StunClient::StunClient(const std::string& server, const std::string& port)
+    : stun_server_(server), stun_port_(port)
+{
+}
+
+void StunClient::setStunServer(const std::string& server, const std::string& port) {
+    stun_server_ = server;
+    stun_port_ = port;
+}
+
+std::optional<PublicAddress> StunClient::discoverPublicAddress()
 {
     using boost::asio::ip::udp;
     try
     {
         // --- Setup socket, build and send STUN binding request --- //
-
         boost::asio::io_context io_context;
         udp::resolver resolver(io_context);
-        udp::endpoint stun_endpoint = *resolver.resolve("stun.l.google.com", "19302").begin();
+        udp::endpoint stun_endpoint = *resolver.resolve(stun_server_, stun_port_).begin();
         udp::socket socket(io_context);
         socket.open(udp::v4());
 
@@ -29,9 +38,45 @@ std::optional<PublicAddress> get_public_address()
         // Receive response
         std::array<uint8_t, 512> response{};
         udp::endpoint sender_endpoint;
-        size_t len = socket.receive_from(boost::asio::buffer(response), sender_endpoint);
+        
+        // Set timeout
+        socket.non_blocking(true);
+        boost::asio::steady_timer timer(io_context);
+        timer.expires_after(std::chrono::seconds(5));
+        
+        boost::system::error_code ec;
+        size_t len = 0;
+        
+        bool received = false;
 
-        // --- Validate STUN Reponse --- //
+        // Async receive with timeout
+        socket.async_receive_from(
+            boost::asio::buffer(response), sender_endpoint,
+            [&](const boost::system::error_code& error, std::size_t bytes_recvd) {
+                if (!error) {
+                    len = bytes_recvd;
+                    received = true;
+                    timer.cancel(); // cancel the timer if we received data
+                }
+            }
+        );
+        
+        // Set up async timeout
+        timer.async_wait([&](const boost::system::error_code& error) {
+            if (!error) {
+                socket.cancel(); // cancel receive if timeout occurs
+            }
+        });
+        
+        // Run IO until one of them finishes
+        io_context.run();
+        
+        if (!received) {
+            std::cerr << "[STUN] Response timeout or error.\n";
+            return std::nullopt;
+        }
+
+        // --- Validate STUN Response --- //
 
         // Check length is not smaller than header size
         if (len < 20) {
@@ -52,8 +97,6 @@ std::optional<PublicAddress> get_public_address()
             std::cerr << "[STUN] Not a Binding Success Response.\n";
             return std::nullopt;
         }
-
-        // TODO: Check magic cookie and transaction ID validity
 
         // Parse XOR-MAPPED-ADDRESS attribute
         for (size_t i = 20; i + 4 < len;) {

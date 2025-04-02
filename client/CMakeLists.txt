@@ -29,6 +29,7 @@ set(SOURCES
     src/networking.cpp
     src/signaling.cpp
     src/stun.cpp
+    src/chat_app.cpp
 )
 
 # Create executable
@@ -51,6 +52,7 @@ target_link_libraries(P2PChat PRIVATE
     ${OPENSSL_LIBRARIES}
     ${ZLIB_LIBRARIES}
     ws2_32
+    mswsock
     crypt32
 )
 

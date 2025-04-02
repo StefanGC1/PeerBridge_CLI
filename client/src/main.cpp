@@ -1,113 +1,143 @@
+#include "chat_app.hpp"
 #include <iostream>
 #include <string>
-#include <boost/asio.hpp>
-#include "crypto.hpp"
-#include "signaling.hpp"
-#include "stun.hpp"
-#include <sodium.h>
-#include <nlohmann/json.hpp>
-#include <networking.hpp>
+#include <thread>
+#include <atomic>
+#include <mutex>
+#include <signal.h>
 
-int main()
-{
-    // Initialize libsodium
-    if (init_crypto() < 0)
-    {
-        std::cerr << "Libsodium init failed.\n";
-        return 1;
-    }
+// Global variables
+static std::atomic<bool> g_running = true;
+static std::mutex g_input_mutex;
+static std::unique_ptr<ChatApplication> g_app;
 
-    // Use STUN to get NAT info (public IP + port)
-    std::optional<PublicAddress> clientAddress = get_public_address();
-    if (!clientAddress)
-    {
-        std::cerr << "Catastrophic failure, couldn't get public IP.\n";
-        return 1;
-    }
+// Signal handler for graceful shutdown
+void signal_handler(int signal) {
+    g_running = false;
+}
 
-    const auto [ip, port] = *clientAddress;
-    std::cout << "IP and Port: " << ip << ":" << port << std::endl;
+void print_usage() {
+    std::cout << "Usage: p2p_chat <username> [peer_username]" << std::endl;
+    std::cout << "  username: Your username for the chat session" << std::endl;
+    std::cout << "  peer_username: (Optional) Username of peer to connect to" << std::endl;
+}
 
-    // Initialize websocket with backend
-    std::string url = "wss://461c-188-26-252-82.ngrok-free.app";
-    init_socket(url);
-
-    // Register user
-    std::string username;
-    std::cout << "Enter your username: ";
-    std::getline(std::cin, username);
-    register_user(username, ip, port);
-
-    // Start p2p socket
-    start_p2p_listener(port);
-
-    // Main event loop
-    while (true)
-    {
-        std::string input;
-        std::getline(std::cin, input);
-    
-        if (waiting_for_chat_init)
+void input_thread_func() {
+    while (g_running) {
+        std::string line;
         {
-            std::cout << "[System] Waiting for chat response...\n";
-            std::this_thread::sleep_for(std::chrono::milliseconds(500));
-            continue;
+            std::lock_guard<std::mutex> lock(g_input_mutex);
+            std::getline(std::cin, line);
         }
-
-        if (in_p2p_chat)
-        {
-            if (input == "/leave")
-            {
-                if (in_p2p_chat)
-                {
-                    leave_chat();
-                    in_p2p_chat = false;
-                    waiting_for_chat_init = false;
-                } else
-                {
-                    std::cout << "[System] You're not in a chat.\n";
-                }
-                continue;
-            }
-            send_chat_message(input);
-        }
-
-        if (input == "/hello")
-        {
-            send_greeting();
-            continue;
-        }
-
-        else if (input == "/get-own-name")
-        {
-            request_username();
-            continue;
-        }
-
-        else if (input.rfind("/get-peer ", 0) == 0)
-        {
-            std::string target = input.substr(10);
-            request_peer_info(target);
-            continue;
-        }
-
-        else if (input.rfind("/chat ", 0) == 0) {
-            std::string target = input.substr(6);
-            std::cout << target << std::endl;
-
-            send_chat_request(target);
-            waiting_for_chat_init = true;
-            std::cout << "[System] Request sent to chat with " << target << "\n";
-            continue;
-        }
-
-        else if (input == "/exit")
-        {
+        
+        if (line == "/quit" || line == "/exit") {
+            g_running = false;
             break;
         }
+        else if (line == "/help") {
+            std::cout << "Commands:" << std::endl;
+            std::cout << "  /connect <username> - Connect to a peer" << std::endl;
+            std::cout << "  /disconnect - Disconnect from current peer" << std::endl;
+            std::cout << "  /accept - Accept incoming chat request" << std::endl;
+            std::cout << "  /reject - Reject incoming chat request" << std::endl;
+            std::cout << "  /quit or /exit - Exit the application" << std::endl;
+            std::cout << "  /help - Show this help message" << std::endl;
+        }
+        else if (line.substr(0, 9) == "/connect ") {
+            std::string peer = line.substr(9);
+            g_app->connectToPeer(peer);
+        }
+        else if (line == "/disconnect") {
+            g_app->disconnect();
+        }
+        else if (line == "/accept") {
+            g_app->acceptIncomingRequest();
+        }
+        else if (line == "/reject") {
+            g_app->rejectIncomingRequest();
+        }
+        else if (!line.empty() && g_app->isConnected()) {
+            g_app->sendMessage(line);
+            std::cout << "You: " << line << std::endl;
+        }
     }
+}
 
-    leave_chat();
-    std::cout << "Stefan";
+int main(int argc, char* argv[]) {
+    // Setup signal handlers
+    signal(SIGINT, signal_handler);
+    signal(SIGTERM, signal_handler);
+    
+    // Parse command line arguments
+    if (argc < 2 || argc > 3) {
+        print_usage();
+        return 1;
+    }
+    
+    std::string username = argv[1];
+    std::string peer_username = "";
+    
+    if (argc == 3) {
+        peer_username = argv[2];
+    }
+    
+    // Create and initialize chat application
+    const std::string server_url = "wss://979c-188-26-252-82.ngrok-free.app"; // Change this to your server URL
+    int local_port = 0; // Let the system pick an available port
+    g_app = std::make_unique<ChatApplication>();
+    
+    // Setup callbacks
+    g_app->setStatusCallback([](const std::string& status) {
+        std::cout << "[Status] " << status << std::endl;
+    });
+    
+    g_app->setMessageCallback([](const std::string& from, const std::string& message) {
+        std::cout << from << ": " << message << std::endl;
+    });
+    
+    g_app->setConnectionCallback([](bool connected, const std::string& peer) {
+        if (connected) {
+            std::cout << "[Chat] Connected to " << peer << std::endl;
+            std::cout << "Type your messages, or use /help for commands." << std::endl;
+        } else {
+            std::cout << "[Chat] Disconnected from " << peer << std::endl;
+        }
+    });
+    
+    g_app->setChatRequestCallback([](const std::string& from) {
+        std::cout << "[Request] " << from << " wants to chat with you." << std::endl;
+        std::cout << "Type /accept to accept or /reject to decline." << std::endl;
+    });
+    
+    // Initialize the application with the UDP networking
+    if (!g_app->initialize(server_url, username, local_port)) {
+        std::cerr << "Failed to initialize the application. Exiting." << std::endl;
+        return 1;
+    }
+    
+    // If peer username provided, connect to them
+    if (!peer_username.empty()) {
+        g_app->connectToPeer(peer_username);
+    }
+    
+    // Start input thread
+    std::thread input_thread(input_thread_func);
+    
+    // Main loop (status updates, etc.)
+    while (g_running) {
+        // In the UDP implementation, we don't need to explicitly process messages
+        // as they're handled by callbacks in the background threads
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    
+    // Cleanup
+    g_app->disconnect();
+    
+    // Wait for input thread to finish
+    if (input_thread.joinable()) {
+        input_thread.join();
+    }
+    
+    std::cout << "Application exiting. Goodbye!" << std::endl;
     return 0;
 }
