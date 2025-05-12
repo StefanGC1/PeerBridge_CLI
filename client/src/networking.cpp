@@ -4,8 +4,11 @@
 #include <random>
 #include <cstring>
 
-UDPNetwork::UDPNetwork() 
+UDPNetwork::UDPNetwork(
+    std::unique_ptr<boost::asio::ip::udp::socket> socket,
+    boost::asio::io_context& context) 
     : running_(false), connected_(false), local_port_(0), next_sequence_number_(0)
+    , socket_(std::move(socket)), io_context_(context)
 {
 }
 
@@ -15,16 +18,11 @@ UDPNetwork::~UDPNetwork() {
 
 bool UDPNetwork::startListening(int port) {
     try {
-        // Create socket
-        socket_ = std::make_unique<boost::asio::ip::udp::socket>(
-            io_context_, 
-            boost::asio::ip::udp::endpoint(boost::asio::ip::udp::v4(), port)
-        );
-        
         // Get local endpoint information
         boost::asio::ip::udp::endpoint local_endpoint = socket_->local_endpoint();
         local_address_ = local_endpoint.address().to_string();
         local_port_ = local_endpoint.port();
+        socket_->non_blocking(false);
         
         // Start IO context in a separate thread
         running_ = true;
@@ -62,11 +60,6 @@ bool UDPNetwork::connectToPeer(const std::string& ip, int port) {
         connected_ = true;
         last_received_time_ = std::chrono::steady_clock::now();
         
-        // Notify about connection state change
-        if (on_connection_) {
-            on_connection_(true);
-        }
-        
         return true;
     } catch (const std::exception& e) {
         std::cerr << "[Network] Connect error: " << e.what() << std::endl;
@@ -93,7 +86,7 @@ void UDPNetwork::startHolePunchingProcess(const boost::asio::ip::udp::endpoint& 
             this->checkConnectionStatus();
             
             // Sleep for a short period
-            std::this_thread::sleep_for(std::chrono::seconds(1));
+            std::this_thread::sleep_for(std::chrono::seconds(3));
         }
     });
     keepalive_thread_.detach();
@@ -321,12 +314,11 @@ void UDPNetwork::receiveLoop() {
             // Process packet based on type
             switch (packetType) {
                 case PacketType::HOLE_PUNCH:
-                    // Just update last received time, which was done above
-                    std::cout << "STEFAN :: HOLE PUNCHED";
+                    // Update last received time, which was done above
                     break;
                     
                 case PacketType::HEARTBEAT:
-                    // Just update last received time, which was done above
+                    // Done by keep-alive thread
                     break;
                     
                 case PacketType::MESSAGE: {

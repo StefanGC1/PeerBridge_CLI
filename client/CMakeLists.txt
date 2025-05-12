@@ -17,7 +17,12 @@ set(IXWS_ROOT "${CMAKE_SOURCE_DIR}/external/ixwebsocket")
 set(IXWS_INCLUDE_DIRS "${CMAKE_SOURCE_DIR}/external/ixwebsocket/include")
 set(IXWS_LIBRARY "${CMAKE_SOURCE_DIR}/external/ixwebsocket/lib/libixwebsocket.a")
 
+set(WINTUN_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/wintun/include")
+message(STATUS "wintun: ${WINTUN_INCLUDE_DIR}")
+set(WINTUN_DLL_DIR "${CMAKE_SOURCE_DIR}/wintun/bin")
+
 include_directories(${IXWS_INCLUDE_DIRS})
+include_directories(${WINTUN_INCLUDE_DIR})
 link_directories(${IXWS_ROOT}/lib)
 
 
@@ -30,6 +35,7 @@ set(SOURCES
     src/signaling.cpp
     src/stun.cpp
     src/chat_app.cpp
+    src/tun_interface.cpp
 )
 
 # Create executable
@@ -55,6 +61,13 @@ target_link_libraries(P2PChat PRIVATE
     mswsock
     crypt32
 )
+
+# Copy Wintun driver dll to build dir
+add_custom_command(TARGET P2PChat POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${WINTUN_DLL_DIR}/wintun.dll"
+            $<TARGET_FILE_DIR:P2PChat>
+    )
 
 target_compile_definitions(P2PChat PRIVATE IXWEBSOCKET_USE_TLS)
 

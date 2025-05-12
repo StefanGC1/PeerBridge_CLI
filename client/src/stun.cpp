@@ -1,10 +1,10 @@
 #include "stun.hpp"
-#include <boost/asio.hpp>
 #include <iostream>
 #include <sodium/randombytes.h>
 
 StunClient::StunClient(const std::string& server, const std::string& port)
     : stun_server_(server), stun_port_(port)
+    , io_context_()
 {
 }
 
@@ -18,12 +18,11 @@ std::optional<PublicAddress> StunClient::discoverPublicAddress()
     using boost::asio::ip::udp;
     try
     {
+        socket_ = std::make_unique<udp::socket>(io_context_);
         // --- Setup socket, build and send STUN binding request --- //
-        boost::asio::io_context io_context;
-        udp::resolver resolver(io_context);
+        udp::resolver resolver(io_context_);
         udp::endpoint stun_endpoint = *resolver.resolve(stun_server_, stun_port_).begin();
-        udp::socket socket(io_context);
-        socket.open(udp::v4());
+        socket_->open(udp::v4());
 
         // Build STUN binding request according to RFC 5389 protocol
         std::array<uint8_t, 20> request{};
@@ -33,15 +32,15 @@ std::optional<PublicAddress> StunClient::discoverPublicAddress()
         randombytes_buf(&request[8], 12); // Bytes 8..19 Transaction ID
 
         // Send request
-        socket.send_to(boost::asio::buffer(request), stun_endpoint);
+        socket_->send_to(boost::asio::buffer(request), stun_endpoint);
 
         // Receive response
         std::array<uint8_t, 512> response{};
         udp::endpoint sender_endpoint;
         
         // Set timeout
-        socket.non_blocking(true);
-        boost::asio::steady_timer timer(io_context);
+        socket_->non_blocking(true);
+        boost::asio::steady_timer timer(io_context_);
         timer.expires_after(std::chrono::seconds(5));
         
         boost::system::error_code ec;
@@ -50,7 +49,7 @@ std::optional<PublicAddress> StunClient::discoverPublicAddress()
         bool received = false;
 
         // Async receive with timeout
-        socket.async_receive_from(
+        socket_->async_receive_from(
             boost::asio::buffer(response), sender_endpoint,
             [&](const boost::system::error_code& error, std::size_t bytes_recvd) {
                 if (!error) {
@@ -64,13 +63,13 @@ std::optional<PublicAddress> StunClient::discoverPublicAddress()
         // Set up async timeout
         timer.async_wait([&](const boost::system::error_code& error) {
             if (!error) {
-                socket.cancel(); // cancel receive if timeout occurs
+                socket_->cancel(); // cancel receive if timeout occurs
             }
         });
         
         // Run IO until one of them finishes
-        io_context.run();
-        
+        io_context_.run();
+
         if (!received) {
             std::cerr << "[STUN] Response timeout or error.\n";
             return std::nullopt;
@@ -129,4 +128,14 @@ std::optional<PublicAddress> StunClient::discoverPublicAddress()
     }
 
     return std::nullopt;
+}
+
+std::unique_ptr<boost::asio::ip::udp::socket> StunClient::getSocket()
+{
+    return std::move(socket_);
+}
+
+boost::asio::io_context& StunClient::getContext()
+{
+    return io_context_;
 }

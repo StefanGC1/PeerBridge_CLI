@@ -32,12 +32,26 @@ bool ChatApplication::initialize(const std::string& server_url, const std::strin
     signaling_.setChatInitCallback([this](const std::string& username, const std::string& ip, int port) {
         this->handleChatInit(username, ip, port);
     });
+
+    // Discover public address
+    if (!discoverPublicAddress()) {
+        if (on_status_) {
+            on_status_("Failed to discover public address, NAT traversal may not work");
+        }
+        return false;
+    }
+
+    // Create netowoking class, use same socket on which STUN was done on to preserve
+    // the NAT binding caused by it
+    network_ = std::make_unique<UDPNetwork>(
+        std::move(stun_.getSocket()),
+        stun_.getContext());
     
-    network_.setMessageCallback([this](const std::string& message) {
+    network_->setMessageCallback([this](const std::string& message) {
         this->handlePeerMessage(message);
     });
     
-    network_.setConnectionCallback([this](bool connected) {
+    network_->setConnectionCallback([this](bool connected) {
         this->handleConnectionChange(connected);
     });
     
@@ -50,32 +64,19 @@ bool ChatApplication::initialize(const std::string& server_url, const std::strin
     }
     
     // Start UDP network
-    if (!network_.startListening(local_port)) {
+    if (!network_->startListening(local_port)) {
         if (on_status_) {
             on_status_("Failed to start UDP network");
         }
         return false;
     }
-    
-    // Discover public address
-    if (!discoverPublicAddress()) {
-        if (on_status_) {
-            on_status_("Failed to discover public address, NAT traversal may not work");
-        }
-        // Continue anyway, might work on local network
-    }
-    
-    // Register with the signaling server
-    if (public_ip_.empty()) {
-        // Use local address if STUN failed
-        signaling_.registerUser(username_, network_.getLocalAddress(), network_.getLocalPort());
-    } else {
-        signaling_.registerUser(username_, public_ip_, public_port_);
-    }
-    
+
+    signaling_.registerUser(username_, public_ip_, public_port_);
+
     if (on_status_) {
         on_status_("Initialized successfully");
     }
+    std::cout << "logic";
     
     return true;
 }
@@ -97,7 +98,7 @@ bool ChatApplication::discoverPublicAddress() {
 }
 
 bool ChatApplication::connectToPeer(const std::string& peer_username) {
-    if (network_.isConnected()) {
+    if (network_->isConnected()) {
         if (on_status_) {
             on_status_("Already connected to a peer");
         }
@@ -122,7 +123,7 @@ bool ChatApplication::connectToPeer(const std::string& peer_username) {
 void ChatApplication::disconnect() {
     running_ = false;
     
-    network_.disconnect();
+    network_->disconnect();
     signaling_.disconnect();
     
     peer_username_ = "";
@@ -134,23 +135,18 @@ void ChatApplication::disconnect() {
 }
 
 bool ChatApplication::sendMessage(const std::string& message) {
-    if (!network_.isConnected()) {
+    if (!network_->isConnected()) {
         if (on_status_) {
             on_status_("Not connected to a peer");
         }
         return false;
     }
     
-    return network_.sendMessage(message);
-}
-
-void ChatApplication::processIncomingMessages() {
-    // This function would be needed if we had a message queue
-    // but our current design uses callbacks directly
+    return network_->sendMessage(message);
 }
 
 bool ChatApplication::isConnected() const {
-    return network_.isConnected();
+    return network_->isConnected();
 }
 
 bool ChatApplication::isRunning() const {
@@ -222,11 +218,10 @@ void ChatApplication::handleChatInit(const std::string& username, const std::str
     }
     
     // Start UDP hole punching process
-    if (!network_.connectToPeer(ip, port)) {
+    if (!network_->connectToPeer(ip, port)) {
         if (on_status_) {
             on_status_("Failed to initiate UDP hole punching, will retry...");
         }
-        // We'll keep trying in the background
     }
 }
 

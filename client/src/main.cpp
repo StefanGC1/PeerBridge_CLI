@@ -1,4 +1,5 @@
 #include "chat_app.hpp"
+#include "tun_interface.hpp"
 #include <iostream>
 #include <string>
 #include <thread>
@@ -57,13 +58,21 @@ void input_thread_func() {
             g_app->rejectIncomingRequest();
         }
         else if (!line.empty() && g_app->isConnected()) {
-            g_app->sendMessage(line);
             std::cout << "You: " << line << std::endl;
+            g_app->sendMessage(line);
         }
     }
 }
 
 int main(int argc, char* argv[]) {
+    // Test wintun interface intialization
+    TunInterface tunInterface;
+    if (tunInterface.initialize("PeerBridge")) {
+        std::cout << "WinTun adapter initialized successfully." << std::endl;
+    } else {
+        std::cerr << "Failed to initialize WinTun adapter." << std::endl;
+    }
+
     // Setup signal handlers
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
@@ -81,8 +90,7 @@ int main(int argc, char* argv[]) {
         peer_username = argv[2];
     }
     
-    // Create and initialize chat application
-    const std::string server_url = "wss://979c-188-26-252-82.ngrok-free.app"; // Change this to your server URL
+    const std::string server_url = "wss://c54e-86-125-92-244.ngrok-free.app"; // Change this to your server URL
     int local_port = 0; // Let the system pick an available port
     g_app = std::make_unique<ChatApplication>();
     
@@ -125,8 +133,6 @@ int main(int argc, char* argv[]) {
     
     // Main loop (status updates, etc.)
     while (g_running) {
-        // In the UDP implementation, we don't need to explicitly process messages
-        // as they're handled by callbacks in the background threads
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
     

@@ -64,7 +64,7 @@ private:
     // Components
     SignalingClient signaling_;
     StunClient stun_;
-    UDPNetwork network_; // Changed to UDPNetwork
+    std::unique_ptr<UDPNetwork> network_; // Changed to UDPNetwork
     
     // Public address
     std::string public_ip_;

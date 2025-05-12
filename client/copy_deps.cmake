@@ -36,6 +36,9 @@ foreach(DLL_PATH ${DLL_PATHS})
     endif()
 endforeach()
 
+# Copy the Wintun driver DLL to release dir
+file(COPY "${CMAKE_BINARY_DIR}/wintun.dll" DESTINATION "${CMAKE_BINARY_DIR}/release")
+
 # (Optional) Copy readme/config files
 file(GLOB EXTRA_FILES "${CMAKE_SOURCE_DIR}/README.*")
 file(COPY ${EXTRA_FILES} DESTINATION "${CMAKE_BINARY_DIR}/release")

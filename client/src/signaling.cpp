@@ -23,19 +23,19 @@ bool SignalingClient::connect(const std::string& server_url) {
     ws_->setUrl(server_url);
     setupMessageHandlers();
     ws_->start();
-    
+
     // Wait for connection with timeout
     int retries = 50;
     for (int i = 0; i < retries && !connected_; ++i) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
-    
+
     if (!connected_) {
         std::cerr << "[Client] Failed to connect to server after timeout.\n";
         ws_->stop();
         return false;
     }
-    
+
     return true;
 }
 

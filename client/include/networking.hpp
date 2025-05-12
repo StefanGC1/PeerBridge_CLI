@@ -15,7 +15,10 @@ public:
     using MessageCallback = std::function<void(const std::string&)>;
     using ConnectionCallback = std::function<void(bool)>;
     
-    UDPNetwork();
+    UDPNetwork(
+        std::unique_ptr<boost::asio::ip::udp::socket>,
+        boost::asio::io_context&
+    );
     ~UDPNetwork();
     
     // Setup and connection
@@ -61,7 +64,7 @@ private:
     int local_port_;
     std::string local_address_;
     
-    boost::asio::io_context io_context_;
+    boost::asio::io_context& io_context_;
     std::unique_ptr<boost::asio::ip::udp::socket> socket_;
     boost::asio::ip::udp::endpoint peer_endpoint_;
     
