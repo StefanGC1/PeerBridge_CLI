@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.10)
-project(P2PChat)
+project(P2PNet)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -34,15 +34,15 @@ set(SOURCES
     src/networking.cpp
     src/signaling.cpp
     src/stun.cpp
-    src/chat_app.cpp
+    src/p2p_system.cpp
     src/tun_interface.cpp
 )
 
 # Create executable
-add_executable(P2PChat ${SOURCES})
+add_executable(P2PNet ${SOURCES})
 
 # Include directories
-target_include_directories(P2PChat PRIVATE
+target_include_directories(P2PNet PRIVATE
     ${Boost_INCLUDE_DIRS}
     ${LIBSODIUM_INCLUDE_DIRS}
     ${OPENSSL_INCLUDE_DIRS}
@@ -51,7 +51,7 @@ target_include_directories(P2PChat PRIVATE
 )
 
 # Link libraries
-target_link_libraries(P2PChat PRIVATE
+target_link_libraries(P2PNet PRIVATE
     ${Boost_LIBRARIES}
     ${LIBSODIUM_LIBRARIES}
     ${IXWS_LIBRARY}
@@ -60,16 +60,17 @@ target_link_libraries(P2PChat PRIVATE
     ws2_32
     mswsock
     crypt32
+    iphlpapi
 )
 
 # Copy Wintun driver dll to build dir
-add_custom_command(TARGET P2PChat POST_BUILD
+add_custom_command(TARGET P2PNet POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${WINTUN_DLL_DIR}/wintun.dll"
-            $<TARGET_FILE_DIR:P2PChat>
+            $<TARGET_FILE_DIR:P2PNet>
     )
 
-target_compile_definitions(P2PChat PRIVATE IXWEBSOCKET_USE_TLS)
+target_compile_definitions(P2PNet PRIVATE IXWEBSOCKET_USE_TLS)
 
 #### POST-BUILD PACKAGING ####
 
@@ -79,12 +80,12 @@ if(ENABLE_DEP_COPY)
     # Copy dependencies automatically
     add_custom_target(copy_deps ALL
         COMMAND ${CMAKE_COMMAND}
-            -DTARGET_EXE=$<TARGET_FILE:P2PChat>
+            -DTARGET_EXE=$<TARGET_FILE:P2PNet>
             -P "${CMAKE_SOURCE_DIR}/copy_deps.cmake"
-        BYPRODUCTS "${CMAKE_BINARY_DIR}/release/P2PChat.exe"
+        BYPRODUCTS "${CMAKE_BINARY_DIR}/release/P2PNet.exe"
         VERBATIM
     )
-    add_dependencies(copy_deps P2PChat)
+    add_dependencies(copy_deps P2PNet)
 
     # Install step: include the release folder contents in the package
     install(DIRECTORY "${CMAKE_BINARY_DIR}/release/" DESTINATION .)
@@ -92,7 +93,7 @@ if(ENABLE_DEP_COPY)
     # Package config (CPack ZIP)
     include(InstallRequiredSystemLibraries)
     set(CPACK_GENERATOR "ZIP")
-    set(CPACK_PACKAGE_NAME "P2PChat")
+    set(CPACK_PACKAGE_NAME "P2PNet")
     set(CPACK_PACKAGE_VERSION "1.0.0")
     set(CPACK_PACKAGE_FILE_NAME "${CPACK_PACKAGE_NAME}-${CPACK_PACKAGE_VERSION}")
     set(CPACK_INCLUDE_TOPLEVEL_DIRECTORY OFF)
