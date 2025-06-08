@@ -6,19 +6,17 @@
 
 class ConditionalLogger {
 public:
-    // Singleton pattern to ensure global control
+    // Singleton
     static ConditionalLogger& getInstance() {
         static ConditionalLogger instance;
         return instance;
     }
 
-    // Enable/disable logging
     void setLoggingEnabled(bool enabled) {
         std::lock_guard<std::mutex> lock(logMutex_);
         loggingEnabled_ = enabled;
     }
 
-    // Get logging status
     bool isLoggingEnabled() const {
         return loggingEnabled_;
     }
@@ -30,7 +28,7 @@ public:
         return loggingEnabled_;
     }
 
-    // Stream operator overloads to behave like std::cout (default level INFO)
+    // Stream operator overloads
     template<typename T>
     ConditionalLogger& operator<<(const T& data) {
         if (loggingEnabled_) {
@@ -50,9 +48,8 @@ public:
     }
 
 private:
-    ConditionalLogger() : loggingEnabled_(false){} // Disabled by default
+    ConditionalLogger() : loggingEnabled_(true){}
     
-    // Prevent copying and assignment
     ConditionalLogger(const ConditionalLogger&) = delete;
     ConditionalLogger& operator=(const ConditionalLogger&) = delete;
 
@@ -62,3 +59,18 @@ private:
 
 // Global instances for easy access
 #define clog ConditionalLogger::getInstance()
+
+#include <quill/Logger.h>
+#include <quill/LogMacros.h>
+
+void initLogging();
+quill::Logger* sysLogger();
+quill::Logger* netLogger();
+
+#define SYSTEM_LOG_INFO(fmt, ...) QUILL_LOG_INFO(sysLogger(), fmt, ##__VA_ARGS__)
+#define SYSTEM_LOG_WARNING(fmt, ...) QUILL_LOG_WARNING(sysLogger(), fmt, ##__VA_ARGS__)
+#define SYSTEM_LOG_ERROR(fmt, ...) QUILL_LOG_ERROR(sysLogger(), fmt, ##__VA_ARGS__)
+
+#define NETWORK_LOG_INFO(fmt, ...) QUILL_LOG_INFO(netLogger(), fmt, ##__VA_ARGS__)
+#define NETWORK_LOG_WARNING(fmt, ...) QUILL_LOG_WARNING(netLogger(), fmt, ##__VA_ARGS__)
+#define NETWORK_LOG_ERROR(fmt, ...) QUILL_LOG_ERROR(netLogger(), fmt, ##__VA_ARGS__)

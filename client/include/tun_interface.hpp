@@ -90,6 +90,7 @@ private:
     typedef void (*WintunEndSessionFunc)(WINTUN_SESSION_HANDLE);
     typedef void (*WintunCloseAdapterFunc)(WINTUN_ADAPTER_HANDLE);
     typedef BOOL (*WintunGetAdapterLUIDFunc)(WINTUN_ADAPTER_HANDLE, NET_LUID*);
+    typedef BOOL (*WintunDeleteDriverFunc)(void);
     
     // Wintun function pointers
     WintunOpenAdapterFunc pWintunOpenAdapter = nullptr;
@@ -102,6 +103,7 @@ private:
     WintunEndSessionFunc pWintunEndSession = nullptr;
     WintunCloseAdapterFunc pWintunCloseAdapter = nullptr;
     WintunGetAdapterLUIDFunc pWintunGetAdapterLUID = nullptr;
+    WintunDeleteDriverFunc pWintunDeleteDriver = nullptr;
 
     // State management
     std::atomic<bool> running_{false};

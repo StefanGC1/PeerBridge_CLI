@@ -1,5 +1,5 @@
 #include "tun_interface.hpp"
-
+#include "logger.hpp"
 #include <Windows.h>
 #include <iostream>
 #include <string>
@@ -50,6 +50,9 @@ bool TunInterface::loadWintunFunctions(HMODULE wintunModule) {
         reinterpret_cast<WintunCloseAdapterFunc>(GetProcAddress(wintunModule, "WintunCloseAdapter"));
     pWintunGetAdapterLUID =
         reinterpret_cast<WintunGetAdapterLUIDFunc>(GetProcAddress(wintunModule, "WintunGetAdapterLUID"));
+    // TODO: GET WintunDeleteAdapter
+    pWintunDeleteDriver = 
+        reinterpret_cast<WintunDeleteDriverFunc>(GetProcAddress(wintunModule, "WintunDeleteDriver"));
 
     return pWintunOpenAdapter && pWintunCreateAdapter && 
            pWintunStartSession && pWintunAllocateSendPacket && pWintunSendPacket && 
@@ -83,7 +86,12 @@ bool TunInterface::initialize(const std::string& deviceName) {
     if (!adapter) {
         DWORD error = GetLastError();
         std::cerr << "Adapter not found (error: " << error << "); attempting to create a new one" << std::endl;
-        adapter = pWintunCreateAdapter(wideDeviceName.c_str(), L"Wintun", NULL);
+        GUID guid;
+
+        // TODO: CREATE GUID AS CONFIG ON INSTALLER, LOAD FROM CONFIG AFTER
+        static GUID WINTUN_ADAPTER_GUID = 
+            { 0x593be3bb, 0x839a, 0x47e5, { 0x82, 0xa2, 0x95, 0xa0, 0x4a, 0xac, 0xb9, 0x1f } };
+        adapter = pWintunCreateAdapter(wideDeviceName.c_str(), L"Wintun", &WINTUN_ADAPTER_GUID);
 
         if (!adapter) {
             std::cerr << "Failed to create WinTun adapter; please run as Administrator for setup. Error: " << GetLastError() << std::endl;
@@ -105,7 +113,7 @@ bool TunInterface::initialize(const std::string& deviceName) {
         return false;
     }
 
-    std::cout << "WinTun adapter initialized successfully." << std::endl;
+    clog << "WinTun adapter initialized successfully." << std::endl;
     return true;
 }
 
@@ -146,7 +154,7 @@ bool TunInterface::configureInterface(const std::string& ipAddress, const std::s
         return false;
     }
     
-    std::cout << "Interface configured with IP: " << ipAddress << " netmask: " << netmask << std::endl;
+    clog << "Interface configured with IP: " << ipAddress << " netmask: " << netmask << std::endl;
     return true;
 }
 
@@ -196,24 +204,26 @@ bool TunInterface::setupRouting() {
     std::ostringstream command;
     command << "netsh interface ipv4 add route " 
             << networkAddr << " " << netmask_ 
-            << " \"" << narrowAlias << "\"";
+            << " \"" << narrowAlias << "\""
+            << " metric=1";
 
     bool success = executeNetshCommand(command.str());
     
     if (!success) {
-        std::cout << "First route command failed, trying alternative format..." << std::endl;
+        clog << "First route command failed, trying alternative format..." << std::endl;
         
         // Approach 2: Try using CIDR notation
         command.str("");
         command << "netsh interface ipv4 add route " 
                 << networkAddr << "/" << maskBits
-                << " \"" << narrowAlias << "\"";
+                << " \"" << narrowAlias << "\""
+                << " metric=1";
         
         success = executeNetshCommand(command.str());
     }
     
     if (!success) {
-        std::cout << "Second route command failed, trying to add direct routes..." << std::endl;
+        clog << "Second route command failed, trying to add direct routes..." << std::endl;
         
         // Approach 3: Try adding a specific route to peer IP
         // This ensures at least basic connectivity even if subnet routing fails
@@ -229,7 +239,8 @@ bool TunInterface::setupRouting() {
         
         command << "netsh interface ipv4 add route " 
                 << peerIP << "/32"
-                << " \"" << narrowAlias << "\"";
+                << " \"" << narrowAlias << "\""
+                << " metric=1";
         
         success = executeNetshCommand(command.str());
     }
@@ -241,14 +252,24 @@ bool TunInterface::setupRouting() {
     
     // Enable forwarding on the interface
     command.str("");
-    command << "netsh interface ipv4 set interface \"" << narrowAlias << "\" forwarding=enabled";
+    command << "netsh interface ipv4 set interface \"" << narrowAlias << "\" forwarding=enabled metric=1";
     
     if (!executeNetshCommand(command.str())) {
         std::cerr << "Failed to enable forwarding on interface" << std::endl;
         return false;
     }
+
+    // 224.0.0.0/4  →  on-link via P2PBridge, metric 1
+    command.str("");
+    command << "netsh interface ipv4 add route "
+            << "prefix=224.0.0.0/4 "
+            << "interface=\"" << narrowAlias << "\" "
+            << "metric=1";
+    if (!executeNetshCommand(command.str())) {
+        std::cerr << "Failed to add route for multicast traffic" << std::endl;
+    }
     
-    std::cout << "Routing configured successfully for virtual network" << std::endl;
+    clog << "Routing configured successfully for virtual network" << std::endl;
     return true;
 }
 
@@ -263,7 +284,7 @@ bool TunInterface::executeNetshCommand(const std::string& command) {
     // Add "cmd /c " prefix to the command to execute it via cmd
     std::string fullCommand = "cmd /c " + command;
     
-    std::cout << "Executing: " << fullCommand << std::endl;
+    clog << "Executing: " << fullCommand << std::endl;
     
     // Convert to wide string for CreateProcessW
     int size = MultiByteToWideChar(CP_UTF8, 0, fullCommand.c_str(), -1, NULL, 0);
@@ -349,7 +370,7 @@ bool TunInterface::startPacketProcessing() {
     receiveThread_ = std::thread(&TunInterface::receiveThreadFunc, this);
     sendThread_ = std::thread(&TunInterface::sendThreadFunc, this);
     
-    std::cout << "Packet processing started" << std::endl;
+    clog << "Packet processing started" << std::endl;
     return true;
 }
 
@@ -365,7 +386,7 @@ void TunInterface::stopPacketProcessing() {
         sendThread_.join();
     }
     
-    std::cout << "Packet processing stopped" << std::endl;
+    clog << "Packet processing stopped" << std::endl;
 }
 
 void TunInterface::receiveThreadFunc() {
@@ -387,8 +408,8 @@ void TunInterface::receiveThreadFunc() {
                 uint32_t dstIp = (packetDataPtr[16] << 24) | (packetDataPtr[17] << 16) | 
                                   (packetDataPtr[18] << 8) | packetDataPtr[19];
                 
-                std::cout << "TUN Recv: " << uint32ToIp(srcIp) << " -> " << uint32ToIp(dstIp) 
-                          << " (Proto: " << static_cast<int>(protocol) << ", Size: " << packetSize << ")" << std::endl;
+                // clog << "TUN Recv: " << uint32ToIp(srcIp) << " -> " << uint32ToIp(dstIp) 
+                //           << " (Proto: " << static_cast<int>(protocol) << ", Size: " << packetSize << ")" << std::endl;
             }
             
             // Release the packet
@@ -453,8 +474,8 @@ bool TunInterface::sendPacket(const std::vector<uint8_t>& packet) {
         uint32_t dstIp = (packet[16] << 24) | (packet[17] << 16) | 
                           (packet[18] << 8) | packet[19];
         
-        std::cout << "TUN Send: " << uint32ToIp(srcIp) << " -> " << uint32ToIp(dstIp) 
-                  << " (Proto: " << static_cast<int>(protocol) << ", Size: " << packet.size() << ")" << std::endl;
+        // clog << "TUN Send: " << uint32ToIp(srcIp) << " -> " << uint32ToIp(dstIp) 
+        //           << " (Proto: " << static_cast<int>(protocol) << ", Size: " << packet.size() << ")" << std::endl;
     }
     
     // Add the packet to the queue
@@ -498,7 +519,7 @@ void TunInterface::close() {
         wintunModule_ = nullptr;
     }
     
-    std::cout << "TUN interface closed" << std::endl;
+    clog << "TUN interface closed" << std::endl;
 }
 
 std::string TunInterface::getIPAddress() const {

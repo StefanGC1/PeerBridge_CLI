@@ -1,7 +1,32 @@
 #include "p2p_system.hpp"
+#include "logger.hpp"
 #include <iostream>
 #include <vector>
 #include <sstream>
+
+namespace {
+// REMOVE LATER
+inline void dumpMinecraftLan(const std::vector<uint8_t>& buf,
+                             const std::string& textPrefix) {
+    if (buf.size() < 34) return;                  // IPv4 + UDP header minimal
+    const uint8_t  ihl   = (buf[0] & 0x0F) * 4;   // usually 20
+    const uint16_t dport = (buf[ihl+2] << 8) | buf[ihl+3];
+
+    // Filter: UDP 4445 or 4446 AND dest 224.0.2.60
+    // if (dport != 4445 && dport != 4446) return;
+    // if (buf[16] != 224 || buf[17] != 0 || buf[18] != 2 || buf[19] != 60) return;
+
+    std::ostringstream out;
+    out << textPrefix << " MC-LAN • size " << buf.size() - ihl - 8 << " B  | ";
+
+    // payload starts after UDP header (ihl + 8)
+    for (size_t i = ihl + 8; i < buf.size(); ++i) {
+        uint8_t c = buf[i];
+        out << (std::isprint(c) ? static_cast<char>(c) : '.');
+    }
+    clog << out.str() << std::endl;
+}
+}
 
 // Helper structure for IP packet parsing
 struct IPPacket {
@@ -76,7 +101,7 @@ bool P2PSystem::initialize(const std::string& server_url, const std::string& use
     
     // Initialize TUN interface
     tun_ = std::make_unique<TunInterface>();
-    if (!tun_->initialize("P2PBridge")) {
+    if (!tun_->initialize("PeerBridge")) {
         if (on_status_) {
             on_status_("Failed to initialize TUN interface");
         }
@@ -185,6 +210,10 @@ bool P2PSystem::isRunning() const {
     return running_;
 }
 
+void P2PSystem::setRunning() {
+    running_ = false;
+}
+
 bool P2PSystem::isHost() const {
     return is_host_;
 }
@@ -256,6 +285,11 @@ bool P2PSystem::startNetworkInterface() {
         on_status_("Network interface started with IP " + local_virtual_ip_);
         on_status_("Peer has IP " + peer_virtual_ip_);
     }
+
+    clog << "Connection successful! Turning off logging." << std::endl;
+    clog.setLoggingEnabled(false);
+    std::flush(std::cout);
+    std::flush(std::cerr);
     
     return true;
 }
@@ -307,11 +341,11 @@ bool P2PSystem::setupVirtualInterface() {
                 << "protocol=any "
                 << "remoteip=10.0.0.0/24";
     
-    std::cout << "Adding firewall rule: " << firewallCmd.str() << std::endl;
+    clog << "Adding firewall rule: " << firewallCmd.str() << std::endl;
     
     // Execute firewall command (using our TUN interface's command helper)
     if (!tun_->executeNetshCommand(firewallCmd.str())) {
-        std::cout << "Warning: Failed to add inbound firewall rule. Connectivity may be limited." << std::endl;
+        clog << "Warning: Failed to add inbound firewall rule. Connectivity may be limited." << std::endl;
     }
     
     // Add outbound rule too
@@ -324,7 +358,7 @@ bool P2PSystem::setupVirtualInterface() {
                 << "remoteip=10.0.0.0/24";
     
     if (!tun_->executeNetshCommand(firewallCmd.str())) {
-        std::cout << "Warning: Failed to add outbound firewall rule. Connectivity may be limited." << std::endl;
+        clog << "Warning: Failed to add outbound firewall rule. Connectivity may be limited." << std::endl;
     }
     
     // Add specific rule for ICMP (ping)
@@ -337,7 +371,7 @@ bool P2PSystem::setupVirtualInterface() {
                 << "remoteip=10.0.0.0/24";
     
     if (!tun_->executeNetshCommand(firewallCmd.str())) {
-        std::cout << "Warning: Failed to add ICMP firewall rule. Ping may not work." << std::endl;
+        clog << "Warning: Failed to add ICMP firewall rule. Ping may not work." << std::endl;
     }
     
     // Enable File and Printer Sharing (needed for some network discovery protocols)
@@ -347,14 +381,37 @@ bool P2PSystem::setupVirtualInterface() {
                 << "new enable=Yes";
     
     if (!tun_->executeNetshCommand(firewallCmd.str())) {
-        std::cout << "Warning: Failed to enable File and Printer Sharing. Network discovery may be limited." << std::endl;
+        clog << "Warning: Failed to enable File and Printer Sharing. Network discovery may be limited." << std::endl;
+    }
+
+    // Add specific rule for IGMP (inbound)
+    firewallCmd.str("");
+    firewallCmd << "netsh advfirewall firewall add rule "
+                << "name=\"P2P Network IGMP in\" "
+                << "dir=in "
+                << "action=allow "
+                << "protocol=2 "
+                << "remoteip=10.0.0.0/24";
+    if (!tun_->executeNetshCommand(firewallCmd.str())) {
+        clog << "Warning: Failed to add outbound IGMP firewall rule. Multicast may not work." << std::endl;
+    }
+
+    firewallCmd.str("");
+    firewallCmd << "netsh advfirewall firewall add rule "
+                << "name=\"P2P Network IGMP out\" "
+                << "dir=out "
+                << "action=allow "
+                << "protocol=2 "
+                << "remoteip=10.0.0.0/24";
+    if (!tun_->executeNetshCommand(firewallCmd.str())) {
+        clog << "Warning: Failed to add outbound IGMP firewall rule. Multicast may not work." << std::endl;
     }
 
     std::ostringstream netCategoryCmd;
-    netCategoryCmd << "powershell -Command \"Set-NetConnectionProfile -InterfaceAlias 'P2PBridge' -NetworkCategory Private\"";
+    netCategoryCmd << "powershell -Command \"Set-NetConnectionProfile -InterfaceAlias 'PeerBridge' -NetworkCategory Private\"";
 
     if (!tun_->executeNetshCommand(netCategoryCmd.str())) {
-        std::cout << "Warning: Failed to set network category to Private" << std::endl;
+        clog << "Warning: Failed to set network category to Private" << std::endl;
     }
     
     return true;
@@ -405,7 +462,7 @@ void P2PSystem::handleNetworkData(const std::vector<uint8_t>& data) {
         uint32_t srcIp = (data[12] << 24) | (data[13] << 16) | (data[14] << 8) | data[15];
         uint32_t dstIp = (data[16] << 24) | (data[17] << 16) | (data[18] << 8) | data[19];
         
-        std::cout << "NET Recv: " << uint32ToIp(srcIp) << " -> " << uint32ToIp(dstIp) 
+        clog << "NET Recv: " << uint32ToIp(srcIp) << " -> " << uint32ToIp(dstIp) 
                   << " (Proto: " << static_cast<int>(protocol) << ", Size: " << data.size() << ")" << std::endl;
     }
     
@@ -422,7 +479,7 @@ void P2PSystem::handlePacketFromTun(const std::vector<uint8_t>& packet) {
             uint32_t srcIp = (packet[12] << 24) | (packet[13] << 16) | (packet[14] << 8) | packet[15];
             uint32_t dstIp = (packet[16] << 24) | (packet[17] << 16) | (packet[18] << 8) | packet[19];
             
-            std::cout << "P2P Forward: " << uint32ToIp(srcIp) << " -> " << uint32ToIp(dstIp) 
+            clog << "P2P Forward: " << uint32ToIp(srcIp) << " -> " << uint32ToIp(dstIp) 
                       << " (Proto: " << static_cast<int>(protocol) << ", Size: " << packet.size() << ")" << std::endl;
         }
         
@@ -450,15 +507,17 @@ bool P2PSystem::forwardPacketToPeer(const std::vector<uint8_t>& packet) {
     bool isMulticast = (dstIp >> 28) == 14; // 224.0.0.0/4 (first octet 224-239)
     
     if (!isForPeer && !isBroadcast && !isMulticast) {
-        std::cout << "Dropping packet not meant for peer: " << srcIpStr << " -> " << dstIpStr << std::endl;
+        clog << "Dropping packet not meant for peer: " << srcIpStr << " -> " << dstIpStr << std::endl;
         return false;
     }
+
+    if (isMulticast) dumpMinecraftLan(packet, "[TX] Sending");
     
     // Convert packet to string for UDP transmission
     std::string packet_str(packet.begin(), packet.end());
     
     // Send the packet to the peer
-    std::cout << "NET Send: " << srcIpStr << " -> " << dstIpStr 
+    clog << "NET Send: " << srcIpStr << " -> " << dstIpStr 
               << " (Size: " << packet.size() << ")" << std::endl;
     return network_->sendMessage(packet_str);
 }
@@ -482,12 +541,14 @@ bool P2PSystem::deliverPacketToTun(const std::vector<uint8_t>& packet) {
     bool isMulticast = (dstIp >> 28) == 14; // 224.0.0.0/4 (first octet 224-239)
     
     if (!isForUs && !isBroadcast && !isMulticast) {
-        std::cout << "Dropping received packet not meant for us: " << srcIpStr << " -> " << dstIpStr << std::endl;
+        clog << "Dropping received packet not meant for us: " << srcIpStr << " -> " << dstIpStr << std::endl;
         return false;
     }
+
+    if (isMulticast) dumpMinecraftLan(packet, "[TX] Receiving");
     
     // Send the packet to the TUN interface
-    std::cout << "Delivering packet to TUN: " << srcIpStr << " -> " << dstIpStr 
+    clog << "Delivering packet to TUN: " << srcIpStr << " -> " << dstIpStr 
               << " (Size: " << packet.size() << ")" << std::endl;
     return tun_->sendPacket(packet);
 }

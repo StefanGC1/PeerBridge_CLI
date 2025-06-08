@@ -34,6 +34,8 @@ public:
     bool isConnected() const;
     bool isRunning() const;
     bool isHost() const;
+
+    void setRunning();
     
     // Connection request handling
     void acceptIncomingRequest();

@@ -1,4 +1,5 @@
 #include "signaling.hpp"
+#include "logger.hpp"
 #include <iostream>
 #include <thread>
 #include <chrono>
@@ -64,18 +65,18 @@ void SignalingClient::handleMessage(const ix::WebSocketMessagePtr& msg) {
         }
         catch (const std::exception& e) {
             std::cerr << "[Server] Failed to parse message: " << e.what() << std::endl;
-            std::cout << "[Server] (unparsed): " << msg->str << std::endl;
+            clog << "[Server] (unparsed): " << msg->str << std::endl;
         }
     }
     else if (msg->type == ix::WebSocketMessageType::Open) {
-        std::cout << "[Client] Connected to server." << std::endl;
+        clog << "[Client] Connected to server." << std::endl;
         connected_ = true;
         if (onConnect_) {
             onConnect_(true);
         }
     }
     else if (msg->type == ix::WebSocketMessageType::Close) {
-        std::cout << "[Client] Connection closed." << std::endl;
+        clog << "[Client] Connection closed." << std::endl;
         connected_ = false;
         if (onConnect_) {
             onConnect_(false);
@@ -94,19 +95,19 @@ void SignalingClient::handleJsonMessage(const nlohmann::json& data) {
     std::string type = data.value("type", "");
     
     if (type == "greet-back") {
-        std::cout << "[Server -> Client] " << data["message"] << std::endl;
+        clog << "[Server -> Client] " << data["message"] << std::endl;
     }
     else if (type == "register-ack") {
-        std::cout << "[Server -> Client] " << data["message"] << std::endl;
+        clog << "[Server -> Client] " << data["message"] << std::endl;
     }
     else if (type == "your-name") {
-        std::cout << "[Server -> Client] You are registered as: " << data["username"] << std::endl;
+        clog << "[Server -> Client] You are registered as: " << data["username"] << std::endl;
     }
     else if (type == "peer-info") {
         std::string peerName = data["username"];
         std::string ip = data["ip"];
         int port = data["port"];
-        std::cout << "[Server] Peer " << peerName << " is at " << ip << ":" << port << std::endl;
+        clog << "[Server] Peer " << peerName << " is at " << ip << ":" << port << std::endl;
         
         if (onPeerInfo_) {
             onPeerInfo_(peerName, ip, port);
@@ -114,7 +115,7 @@ void SignalingClient::handleJsonMessage(const nlohmann::json& data) {
     }
     else if (type == "chat-request") {
         std::string from = data["from"];
-        std::cout << "[Request] " << from << " wants to chat." << std::endl;
+        clog << "[Request] " << from << " wants to chat." << std::endl;
         
         if (onChatRequest_) {
             onChatRequest_(from);
@@ -124,23 +125,23 @@ void SignalingClient::handleJsonMessage(const nlohmann::json& data) {
         std::string peer_ip = data["ip"];
         int peer_port = data["port"];
         std::string peer_username = data["username"];
-        std::cout << "[Server] Chat initialized with " << peer_username << std::endl;
+        clog << "[Server] Chat initialized with " << peer_username << std::endl;
         
         if (onChatInit_) {
             onChatInit_(peer_username, peer_ip, peer_port);
         }
     }
     else if (type == "error") {
-        std::cout << "[Server ERROR] " << data["message"] << std::endl;
+        clog << "[Server ERROR] " << data["message"] << std::endl;
     }
     else {
-        std::cout << "[Server] Unexpected message type: " << type << std::endl;
+        clog << "[Server] Unexpected message type: " << type << std::endl;
     }
 }
 
 void SignalingClient::sendGreeting() {
     if (!isConnected()) {
-        std::cout << "[Client] Not connected.\n";
+        clog << "[Client] Not connected.\n";
         return;
     }
     
@@ -152,7 +153,7 @@ void SignalingClient::sendGreeting() {
 
 void SignalingClient::registerUser(const std::string& username, const std::string& ip, int port) {
     if (!isConnected()) {
-        std::cout << "[Client] Not connected.\n";
+        clog << "[Client] Not connected.\n";
         return;
     }
     
@@ -167,7 +168,7 @@ void SignalingClient::registerUser(const std::string& username, const std::strin
 
 void SignalingClient::requestUsername() {
     if (!isConnected()) {
-        std::cout << "[Client] Not connected.\n";
+        clog << "[Client] Not connected.\n";
         return;
     }
     
@@ -179,7 +180,7 @@ void SignalingClient::requestUsername() {
 
 void SignalingClient::requestPeerInfo(const std::string& username) {
     if (!isConnected()) {
-        std::cout << "[Client] Not connected.\n";
+        clog << "[Client] Not connected.\n";
         return;
     }
     
@@ -192,7 +193,7 @@ void SignalingClient::requestPeerInfo(const std::string& username) {
 
 void SignalingClient::sendChatRequest(const std::string& username) {
     if (!isConnected()) {
-        std::cout << "[Client] Not connected.\n";
+        clog << "[Client] Not connected.\n";
         return;
     }
     
@@ -205,7 +206,7 @@ void SignalingClient::sendChatRequest(const std::string& username) {
 
 void SignalingClient::acceptChatRequest() {
     if (!isConnected()) {
-        std::cout << "[Client] Not connected.\n";
+        clog << "[Client] Not connected.\n";
         return;
     }
     
@@ -215,7 +216,7 @@ void SignalingClient::acceptChatRequest() {
 
 void SignalingClient::declineChatRequest() {
     if (!isConnected()) {
-        std::cout << "[Client] Not connected.\n";
+        clog << "[Client] Not connected.\n";
         return;
     }
     

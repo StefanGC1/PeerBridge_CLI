@@ -10,6 +10,7 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(LIBSODIUM REQUIRED libsodium)
 pkg_check_modules(OPENSSL REQUIRED openssl)
 pkg_check_modules(ZLIB REQUIRED zlib)
+pkg_check_modules(QUILL REQUIRED quill)
 
 set(NLOHMANN_INCLUDEDIR "${CMAKE_SOURCE_DIR}/external/nlohmann/include")
 
@@ -36,6 +37,7 @@ set(SOURCES
     src/stun.cpp
     src/p2p_system.cpp
     src/tun_interface.cpp
+    src/logger.cpp
 )
 
 # Create executable
@@ -48,6 +50,7 @@ target_include_directories(P2PNet PRIVATE
     ${OPENSSL_INCLUDE_DIRS}
     ${ZLIB_INCLUDE_DIRS}
     ${NLOHMANN_INCLUDEDIR}
+    ${QUILL_INCLUDE_DIRS}
 )
 
 # Link libraries
@@ -71,6 +74,7 @@ add_custom_command(TARGET P2PNet POST_BUILD
     )
 
 target_compile_definitions(P2PNet PRIVATE IXWEBSOCKET_USE_TLS)
+target_compile_definitions(P2PNet PRIVATE SOURCE_ROOT_DIR="${CMAKE_SOURCE_DIR}/src/")
 
 #### POST-BUILD PACKAGING ####
 

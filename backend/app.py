@@ -198,7 +198,7 @@ async def handler(websocket):
             del connected_users[websocket]
 
 async def main():
-    async with websockets.serve(handler, "0.0.0.0", 8080):
+    async with websockets.serve(handler, "0.0.0.0", 5000):
         print("WebSocket Signaling Server running on port 8080...")
         await asyncio.Future()  # Run forever
 

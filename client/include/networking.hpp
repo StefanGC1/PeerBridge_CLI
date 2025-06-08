@@ -37,10 +37,17 @@ public:
     std::string getLocalAddress() const;
 
 private:
+    // Async operations
+    void startAsyncReceive();
+    void handleReceiveFrom(const boost::system::error_code& error, std::size_t bytes_transferred);
+    void handleSendComplete(const boost::system::error_code& error, std::size_t bytes_sent, uint32_t seq);
+    void processReceivedData(std::size_t bytes_transferred);
+    void handleDisconnect();
+
     // UDP hole punching: send periodic keepalive packets
     void startHolePunchingProcess(const boost::asio::ip::udp::endpoint& peer_endpoint);
     void sendHolePunchPacket();
-    void receiveLoop();
+    void receiveLoop(); // Legacy method - will be removed after async transition
     void processMessage(const std::string& message, const boost::asio::ip::udp::endpoint& sender);
     
     // Connection management
@@ -68,7 +75,11 @@ private:
     std::unique_ptr<boost::asio::ip::udp::socket> socket_;
     boost::asio::ip::udp::endpoint peer_endpoint_;
     
-    std::thread receive_thread_;
+    // Async operation buffers and state
+    std::shared_ptr<std::vector<uint8_t>> receiveBuffer_;
+    std::shared_ptr<boost::asio::ip::udp::endpoint> senderEndpoint_;
+    std::thread io_thread_;
+
     std::thread keepalive_thread_;
     std::mutex send_mutex_;
     
