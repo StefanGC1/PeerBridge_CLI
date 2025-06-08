@@ -40,14 +40,9 @@ public:
     // Connection request handling
     void acceptIncomingRequest();
     void rejectIncomingRequest();
-    
-    // Set callbacks
-    using StatusCallback = std::function<void(const std::string&)>;
-    using ConnectionCallback = std::function<void(bool, const std::string&)>;
+
     using ConnectionRequestCallback = std::function<void(const std::string&)>;
-    
-    void setStatusCallback(StatusCallback callback);
-    void setConnectionCallback(ConnectionCallback callback);
+
     void setConnectionRequestCallback(ConnectionRequestCallback callback);
     
 private:
@@ -108,7 +103,5 @@ private:
     int peer_port_;
     
     // Callbacks
-    StatusCallback on_status_;
-    ConnectionCallback on_connection_;
     ConnectionRequestCallback on_connection_request_;
 }; 

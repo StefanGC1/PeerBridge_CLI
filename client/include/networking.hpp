@@ -47,7 +47,6 @@ private:
     // UDP hole punching: send periodic keepalive packets
     void startHolePunchingProcess(const boost::asio::ip::udp::endpoint& peer_endpoint);
     void sendHolePunchPacket();
-    void receiveLoop(); // Legacy method - will be removed after async transition
     void processMessage(const std::string& message, const boost::asio::ip::udp::endpoint& sender);
     
     // Connection management

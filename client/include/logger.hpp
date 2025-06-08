@@ -4,6 +4,8 @@
 #include <mutex>
 #include <string>
 
+static bool shouldLogNetTraffic = false;
+
 class ConditionalLogger {
 public:
     // Singleton
@@ -63,13 +65,56 @@ private:
 #include <quill/Logger.h>
 #include <quill/LogMacros.h>
 
-void initLogging();
+class TrafficLogLimiter
+{
+public:
+    TrafficLogLimiter(double maxLogsPerSec)
+    : capacity(maxLogsPerSec),
+    tokens(capacity),
+    rate(maxLogsPerSec),
+    lastTime(std::chrono::steady_clock::now())
+    {}
+
+    bool tryLog() noexcept
+    {
+        auto now = std::chrono::steady_clock::now();
+        std::chrono::duration<double> delta = now - lastTime;
+        lastTime = now;
+        tokens = std::min(capacity, tokens + (delta.count() * rate));
+
+        if (tokens < 1.0)
+            return false;
+
+        tokens -= 1.0;
+        return true;
+    }
+
+private:
+    double capacity;
+    double rate;
+    double tokens;
+    std::chrono::steady_clock::time_point lastTime;
+};
+
+void initLogging(bool = false);
 quill::Logger* sysLogger();
 quill::Logger* netLogger();
+
+inline TrafficLogLimiter& logLimiter()
+{
+    static TrafficLogLimiter limiter(8.0);
+    return limiter;
+}
 
 #define SYSTEM_LOG_INFO(fmt, ...) QUILL_LOG_INFO(sysLogger(), fmt, ##__VA_ARGS__)
 #define SYSTEM_LOG_WARNING(fmt, ...) QUILL_LOG_WARNING(sysLogger(), fmt, ##__VA_ARGS__)
 #define SYSTEM_LOG_ERROR(fmt, ...) QUILL_LOG_ERROR(sysLogger(), fmt, ##__VA_ARGS__)
+
+#define NETWORK_TRAFFIC_LOG(fmt, ...)                        \
+    do {                                                     \
+        if (shouldLogNetTraffic && logLimiter().tryLog())    \
+            QUILL_LOG_INFO(netLogger(), fmt, ##__VA_ARGS__); \
+    } while (0);
 
 #define NETWORK_LOG_INFO(fmt, ...) QUILL_LOG_INFO(netLogger(), fmt, ##__VA_ARGS__)
 #define NETWORK_LOG_WARNING(fmt, ...) QUILL_LOG_WARNING(netLogger(), fmt, ##__VA_ARGS__)

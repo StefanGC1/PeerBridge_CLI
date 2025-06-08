@@ -284,7 +284,7 @@ bool TunInterface::executeNetshCommand(const std::string& command) {
     // Add "cmd /c " prefix to the command to execute it via cmd
     std::string fullCommand = "cmd /c " + command;
     
-    clog << "Executing: " << fullCommand << std::endl;
+    SYSTEM_LOG_INFO("Executing: {}", fullCommand);
     
     // Convert to wide string for CreateProcessW
     int size = MultiByteToWideChar(CP_UTF8, 0, fullCommand.c_str(), -1, NULL, 0);
@@ -317,6 +317,7 @@ bool TunInterface::executeNetshCommand(const std::string& command) {
     
     if (exitCode != 0) {
         std::cerr << "Command failed with exit code: " << exitCode << std::endl;
+        std::cerr << "Windows error: " << GetLastError() << std::endl;
     }
     
     return exitCode == 0;
@@ -400,18 +401,6 @@ void TunInterface::receiveThreadFunc() {
             const uint8_t* packetDataPtr = reinterpret_cast<const uint8_t*>(packet);
             std::vector<uint8_t> packetData(packetDataPtr, packetDataPtr + packetSize);
             
-            // Debug: Print packet info
-            if (packetSize >= 20) { // Minimum IPv4 header size
-                uint8_t protocol = packetDataPtr[9];
-                uint32_t srcIp = (packetDataPtr[12] << 24) | (packetDataPtr[13] << 16) | 
-                                  (packetDataPtr[14] << 8) | packetDataPtr[15];
-                uint32_t dstIp = (packetDataPtr[16] << 24) | (packetDataPtr[17] << 16) | 
-                                  (packetDataPtr[18] << 8) | packetDataPtr[19];
-                
-                // clog << "TUN Recv: " << uint32ToIp(srcIp) << " -> " << uint32ToIp(dstIp) 
-                //           << " (Proto: " << static_cast<int>(protocol) << ", Size: " << packetSize << ")" << std::endl;
-            }
-            
             // Release the packet
             pWintunReleaseReceivePacket(session, packet);
             
@@ -455,7 +444,7 @@ void TunInterface::sendThreadFunc() {
             }
         } else {
             // No packet available, sleep for a bit
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            std::this_thread::sleep_for(std::chrono::microseconds(5));
         }
     }
 }
@@ -464,18 +453,6 @@ bool TunInterface::sendPacket(const std::vector<uint8_t>& packet) {
     if (!running_) {
         std::cerr << "Packet processing not running" << std::endl;
         return false;
-    }
-    
-    // Debug: Print packet info
-    if (packet.size() >= 20) { // Minimum IPv4 header size
-        uint8_t protocol = packet[9];
-        uint32_t srcIp = (packet[12] << 24) | (packet[13] << 16) | 
-                          (packet[14] << 8) | packet[15];
-        uint32_t dstIp = (packet[16] << 24) | (packet[17] << 16) | 
-                          (packet[18] << 8) | packet[19];
-        
-        // clog << "TUN Send: " << uint32ToIp(srcIp) << " -> " << uint32ToIp(dstIp) 
-        //           << " (Proto: " << static_cast<int>(protocol) << ", Size: " << packet.size() << ")" << std::endl;
     }
     
     // Add the packet to the queue

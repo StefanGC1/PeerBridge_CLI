@@ -1,6 +1,7 @@
 #include "logger.hpp"
 #include <chrono>
 #include <algorithm>
+#include <regex>
 #include <quill/Backend.h>
 #include <quill/Frontend.h>
 #include <quill/sinks/ConsoleSink.h>
@@ -132,8 +133,9 @@ quill::PatternFormatterOptions shortLogFormat()
 static quill::Logger* sysLogObject{};
 static quill::Logger* netLogObject{};
 
-void initLogging()
+void initLogging(bool shouldLogTraffic)
 {
+    shouldLogNetTraffic = shouldLogTraffic;
     const std::string logsPath = initializeLogDirectory();
 
     using namespace quill;

@@ -18,9 +18,9 @@ void signal_handler(int signal) {
 }
 
 void print_usage() {
-    clog << "Usage: p2p_net <username> [peer_username]" << std::endl;
-    clog << "  username: Your username for the P2P connection" << std::endl;
-    clog << "  peer_username: (Optional) Username of peer to connect to" << std::endl;
+    SYSTEM_LOG_INFO("Usage: p2p_net <username> [peer_username]");
+    SYSTEM_LOG_INFO("  username: Your username for the P2P connection");
+    SYSTEM_LOG_INFO("  peer_username: (Optional) Username of peer to connect to");
 }
 
 void input_thread_func() {
@@ -36,19 +36,19 @@ void input_thread_func() {
             break;
         }
         else if (line == "/help") {
-            clog << "Commands:" << std::endl;
-            clog << "  /connect <username> - Connect to a peer" << std::endl;
-            clog << "  /disconnect - Disconnect from current peer" << std::endl;
-            clog << "  /accept - Accept incoming connection request" << std::endl;
-            clog << "  /reject - Reject incoming connection request" << std::endl;
-            clog << "  /status - Display connection status" << std::endl;
-            clog << "  /ip - Show current virtual IP addresses" << std::endl;
-            clog << "  /logs - Toggle logging output (default: disabled)" << std::endl;
-            clog << "  /quit or /exit - Exit the application" << std::endl;
-            clog << "  /help - Show this help message" << std::endl;
+            SYSTEM_LOG_INFO("Commands:");
+            SYSTEM_LOG_INFO("  /connect <username> - Connect to a peer");
+            SYSTEM_LOG_INFO("  /disconnect - Disconnect from current peer");
+            SYSTEM_LOG_INFO("  /accept - Accept incoming connection request");
+            SYSTEM_LOG_INFO("  /reject - Reject incoming connection request");
+            SYSTEM_LOG_INFO("  /status - Display connection status");
+            SYSTEM_LOG_INFO("  /ip - Show current virtual IP addresses");
+            SYSTEM_LOG_INFO("  /logs - Toggle logging output (default: disabled)");
+            SYSTEM_LOG_INFO("  /quit or /exit - Exit the application");
+            SYSTEM_LOG_INFO("  /help - Show this help message");
             clog << std::endl;
-            clog << "When connected, you can use standard network tools like ping or connect" << std::endl;
-            clog << "to services on the other peer using the assigned virtual IP addresses." << std::endl;
+            SYSTEM_LOG_INFO("When connected, you can use standard network tools like ping or connect");
+            SYSTEM_LOG_INFO("to services on the other peer using the assigned virtual IP addresses.");
         }
         else if (line.substr(0, 9) == "/connect ") {
             std::string peer = line.substr(9);
@@ -65,23 +65,19 @@ void input_thread_func() {
         }
         else if (line == "/status") {
             if (g_system->isConnected()) {
-                std::cout << "[Status] Connected" << std::endl;
-                std::cout << "  Role: " << (g_system->isHost() ? "Host" : "Client") << std::endl;
+                SYSTEM_LOG_INFO("[Status] Connected");
+                SYSTEM_LOG_INFO("  Role: {}", (g_system->isHost() ? "Host" : "Client"));
             } else {
-                std::cout << "[Status] Not connected" << std::endl;
+                SYSTEM_LOG_INFO("[Status] Not connected");
             }
         }
         else if (line == "/ip") {
             if (g_system->isConnected()) {
-                std::cout << "[IP] Your virtual IP: " << (g_system->isHost() ? "10.0.0.1" : "10.0.0.2") << std::endl;
-                std::cout << "[IP] Peer virtual IP: " << (g_system->isHost() ? "10.0.0.2" : "10.0.0.1") << std::endl;
+                SYSTEM_LOG_INFO("[IP] Your virtual IP: {}", (g_system->isHost() ? "10.0.0.1" : "10.0.0.2"));
+                SYSTEM_LOG_INFO("[IP] Peer virtual IP: {}", (g_system->isHost() ? "10.0.0.2" : "10.0.0.1"));
             } else {
-                std::cout << "[IP] Not connected" << std::endl;
+                SYSTEM_LOG_INFO("[IP] Not connected");
             }
-        }
-        else if (line == "/logs") {
-            bool enabled = clog.toggleLogging();
-            std::cout << "[System] Logging " << (enabled ? "enabled" : "disabled") << std::endl;
         }
     }
 }
@@ -91,14 +87,11 @@ int main(int argc, char* argv[]) {
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
 
+    // TODO: Disable network traffic logging in 
     initLogging();
 
-    SYSTEM_LOG_INFO("LOGGER GET INFO, FMT TEST PARAM {}", 5);
-    SYSTEM_LOG_WARNING("LOGGER GET WARNING, FMT TEST PARAM {}", 5);
-    SYSTEM_LOG_ERROR("LOGGER GET ERROR, FMT TEST PARAM {}", 5);
-
     std::string username;
-    std::cout << "Enter your username: " << std::endl;
+    SYSTEM_LOG_INFO("Enter your username: ");
     std::getline(std::cin, username);
     if (username.empty()) {
         std::cerr << "Username cannot be empty. Exiting." << std::endl;
@@ -106,37 +99,24 @@ int main(int argc, char* argv[]) {
     }
     std::string peer_username = "";
     
-    const std::string server_url = "wss://striking-washer-hist-range.trycloudflare.com";
+    const std::string server_url = "wss://steam-ct-short-metabolism.trycloudflare.com";
     int local_port = 0; // Let system automatically choose a port
     g_system = std::make_unique<P2PSystem>();
     
     // Setup callbacks
-    g_system->setStatusCallback([](const std::string& status) {
-        clog << "[Status] " << status << std::endl;
-    });
-    
-    g_system->setConnectionCallback([](bool connected, const std::string& peer) {
-        if (connected) {
-            clog << "[System] Connected to " << peer << std::endl;
-            clog << "Virtual network is now active. You can use standard networking tools (ping, etc.)" << std::endl;
-        } else {
-            clog << "[System] Disconnected from " << peer << std::endl;
-        }
-    });
-    
     g_system->setConnectionRequestCallback([](const std::string& from) {
-        clog << "[Request] " << from << " wants to connect with you." << std::endl;
-        clog << "Type /accept to accept or /reject to decline." << std::endl;
+        SYSTEM_LOG_INFO("[Request] {} wants to connect with you.", from);
+        SYSTEM_LOG_INFO("Type /accept to accept or /reject to decline.");
     });
     
     // Initialize the application
     if (!g_system->initialize(server_url, username, local_port)) {
-        std::cerr << "Failed to initialize the application. Exiting." << std::endl;
+        SYSTEM_LOG_ERROR("Failed to initialize the application. Exiting.");
         return 1;
     }
     
-    clog << "P2P System initialized successfully." << std::endl;
-    clog << "Type /help for available commands." << std::endl;
+    SYSTEM_LOG_INFO("P2P System initialized successfully.");
+    SYSTEM_LOG_INFO("Type /help for available commands.");
     
     // Start input thread
     std::thread input_thread(input_thread_func);
@@ -154,6 +134,6 @@ int main(int argc, char* argv[]) {
         input_thread.join();
     }
     
-    clog << "Application exiting. Goodbye!" << std::endl;
+    SYSTEM_LOG_INFO("Application exiting. Goodbye!");
     return 0;
 }
