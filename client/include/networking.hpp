@@ -12,7 +12,7 @@
 
 class UDPNetwork {
 public:
-    using MessageCallback = std::function<void(const std::string&)>;
+    using MessageCallback = std::function<void(const std::vector<uint8_t>)>;
     using ConnectionCallback = std::function<void(bool)>;
     
     UDPNetwork(
@@ -28,7 +28,7 @@ public:
     bool isConnected() const;
     
     // Message handling
-    bool sendMessage(const std::string& message);
+    bool sendMessage(const std::vector<uint8_t>& data);
     void setMessageCallback(MessageCallback callback);
     void setConnectionCallback(ConnectionCallback callback);
     
@@ -47,7 +47,7 @@ private:
     // UDP hole punching: send periodic keepalive packets
     void startHolePunchingProcess(const boost::asio::ip::udp::endpoint& peer_endpoint);
     void sendHolePunchPacket();
-    void processMessage(const std::string& message, const boost::asio::ip::udp::endpoint& sender);
+    void processMessage(std::vector<uint8_t> message, const boost::asio::ip::udp::endpoint& sender);
     
     // Connection management
     void checkConnectionStatus();

@@ -86,9 +86,11 @@ int main(int argc, char* argv[]) {
     // Setup signal handlers
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
-
-    // TODO: Disable network traffic logging in 
+    
+    // TODO: Disable network traffic logging in prod
     initLogging();
+    setShouldLogTraffic(true);
+    NETWORK_TRAFFIC_LOG("TEST");
 
     std::string username;
     SYSTEM_LOG_INFO("Enter your username: ");

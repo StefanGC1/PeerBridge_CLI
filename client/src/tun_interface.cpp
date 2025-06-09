@@ -455,7 +455,7 @@ void TunInterface::sendThreadFunc() {
     }
 }
 
-bool TunInterface::sendPacket(const std::vector<uint8_t>& packet) {
+bool TunInterface::sendPacket(std::vector<uint8_t> packet) {
     if (!running_) {
         std::cerr << "Packet processing not running" << std::endl;
         return false;
@@ -464,7 +464,7 @@ bool TunInterface::sendPacket(const std::vector<uint8_t>& packet) {
     // Add the packet to the queue and notify the send thread
     {
         std::lock_guard<std::mutex> lock(packetQueueMutex_);
-        outgoingPackets_.push(packet);
+        outgoingPackets_.push(std::move(packet));
     }
     packetCondition_.notify_one();
     

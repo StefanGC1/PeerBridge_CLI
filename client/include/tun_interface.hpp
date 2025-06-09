@@ -55,7 +55,7 @@ public:
     void stopPacketProcessing();
 
     // Send a packet through the TUN interface
-    bool sendPacket(const std::vector<uint8_t>& packet);
+    bool sendPacket(std::vector<uint8_t> packet);
 
     // Set callback for received packets
     void setPacketCallback(PacketCallback callback);

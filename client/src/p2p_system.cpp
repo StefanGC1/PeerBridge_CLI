@@ -135,10 +135,9 @@ bool P2PSystem::initialize(const std::string& server_url, const std::string& use
         stun_.getContext());
     
     // Set up network callbacks for P2P connection
-    network_->setMessageCallback([this](const std::string& message) {
+    network_->setMessageCallback([this](std::vector<uint8_t> packet) {
         // Convert message to binary data
-        std::vector<uint8_t> data(message.begin(), message.end());
-        this->handleNetworkData(data);
+        this->handleNetworkData(std::move(packet));
     });
     
     network_->setConnectionCallback([this](bool connected) {
@@ -466,26 +465,23 @@ bool P2PSystem::forwardPacketToPeer(const std::vector<uint8_t>& packet) {
 
     if (isMulticast) dumpMinecraftLan(packet, "[TX] Sending");
     
-    // Convert packet to string for UDP transmission
-    std::string packet_str(packet.begin(), packet.end());
-    
     // Send the packet to the peer
     // TODO: Improve logging
     // NETWORK_TRAFFIC_LOG("[Network] Extracted packet from TUN, sending to peer: {} -> {} (Size: {})",
     //                 srcIpStr, dstIpStr, packet.size());
-    return network_->sendMessage(packet_str);
+    return network_->sendMessage(packet);
 }
 
-void P2PSystem::handleNetworkData(const std::vector<uint8_t>& data) {
+void P2PSystem::handleNetworkData(std::vector<uint8_t> data) {
     // We received a packet from peer, forward to TUN
     // Minimum IPv4 header size and version check
     if (data.size() >= sizeof(IPPacket) && (data[0] >> 4) == 4)
     {
-        deliverPacketToTun(data);
+        deliverPacketToTun(std::move(data));
     }
 }
 
-bool P2PSystem::deliverPacketToTun(const std::vector<uint8_t>& packet) {
+bool P2PSystem::deliverPacketToTun(std::vector<uint8_t> packet) {
     // Check if the packet is an IPv4 packet
     // UNCOMMENT IN CASE THIS BREAKS
     // if (packet.empty() || (packet[0] >> 4) != 4) {
@@ -515,7 +511,7 @@ bool P2PSystem::deliverPacketToTun(const std::vector<uint8_t>& packet) {
     // TODO: Improve logging
     // NETWORK_TRAFFIC_LOG("[Network]  Received packet from peer, delivering to TUN: {} <- {} (Size: {})",
     //                 dstIpStr, srcIpStr, packet.size());
-    return tun_->sendPacket(packet);
+    return tun_->sendPacket(std::move(packet));
 }
 
 std::string P2PSystem::uint32ToIp(uint32_t ipAddress) {

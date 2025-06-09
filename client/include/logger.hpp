@@ -98,13 +98,13 @@ private:
     std::mutex mutex_;
 };
 
-void initLogging(bool = false);
+void initLogging();
 quill::Logger* sysLogger();
 quill::Logger* netLogger();
 
 inline TrafficLogLimiter& logLimiter()
 {
-    static TrafficLogLimiter limiter(8.0);
+    static TrafficLogLimiter limiter(6.0);
     return limiter;
 }
 
@@ -115,13 +115,18 @@ inline TrafficLogLimiter& logLimiter()
 // Too lazy to make this look better :/
 #define NETWORK_TRAFFIC_LOG(fmt, ...)                               \
     do {                                                            \
-        if (shouldLogNetTraffic)                                    \
-        {                                                           \
-            if (logLimiter().tryLog())                              \
-                QUILL_LOG_INFO(netLogger(), fmt, ##__VA_ARGS__);    \
-        }                                                           \
+        if (shouldLogNetTraffic && logLimiter().tryLog())           \
+            QUILL_LOG_INFO(netLogger(), fmt, ##__VA_ARGS__);        \
     } while (0);
 
 #define NETWORK_LOG_INFO(fmt, ...) QUILL_LOG_INFO(netLogger(), fmt, ##__VA_ARGS__)
 #define NETWORK_LOG_WARNING(fmt, ...) QUILL_LOG_WARNING(netLogger(), fmt, ##__VA_ARGS__)
 #define NETWORK_LOG_ERROR(fmt, ...) QUILL_LOG_ERROR(netLogger(), fmt, ##__VA_ARGS__)
+
+// Don't ask why it's here
+inline void setShouldLogTraffic(bool shouldLog)
+{
+    shouldLogNetTraffic = shouldLog;
+    if (shouldLogNetTraffic)
+        SYSTEM_LOG_WARNING("[System] P2P Traffic will be logged to file, connection may be slower!");
+}

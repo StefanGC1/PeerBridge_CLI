@@ -133,9 +133,8 @@ quill::PatternFormatterOptions shortLogFormat()
 static quill::Logger* sysLogObject{};
 static quill::Logger* netLogObject{};
 
-void initLogging(bool shouldLogTraffic)
+void initLogging()
 {
-    shouldLogNetTraffic = shouldLogTraffic;
     const std::string logsPath = initializeLogDirectory();
 
     using namespace quill;

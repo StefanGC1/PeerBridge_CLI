@@ -210,7 +210,7 @@ bool UDPNetwork::isConnected() const {
     return connected_;
 }
 
-bool UDPNetwork::sendMessage(const std::string& message) {
+bool UDPNetwork::sendMessage(const std::vector<uint8_t>& dataToSend) {
     if (!connected_ || !socket_) {
         std::cerr << "[Network] Cannot send message: not connected" << std::endl;
         return false;
@@ -218,12 +218,17 @@ bool UDPNetwork::sendMessage(const std::string& message) {
     
     try {
         // Calculate total packet size: header (16 bytes) + message
-        size_t packetSize = 16 + message.size();
+        size_t packetSize = 16 + dataToSend.size();
         if (packetSize > MAX_PACKET_SIZE) {
             std::cerr << "[Network] Message too large, max size is " << (MAX_PACKET_SIZE - 16) << " bytes" << std::endl;
             return false;
         }
         
+        
+        /*
+        * SMALL CUSTOM PROTOCOL HEADER
+        */
+
         // Create packet with shared ownership for async operation
         auto packet = std::make_shared<std::vector<uint8_t>>(packetSize);
         
@@ -248,14 +253,14 @@ bool UDPNetwork::sendMessage(const std::string& message) {
         (*packet)[11] = seq & 0xFF;
         
         // Set message length
-        uint32_t msg_len = static_cast<uint32_t>(message.size());
+        uint32_t msg_len = static_cast<uint32_t>(dataToSend.size());
         (*packet)[12] = (msg_len >> 24) & 0xFF;
         (*packet)[13] = (msg_len >> 16) & 0xFF;
         (*packet)[14] = (msg_len >> 8) & 0xFF;
         (*packet)[15] = msg_len & 0xFF;
         
         // Copy message content
-        std::memcpy(packet->data() + 16, message.data(), message.size());
+        std::memcpy(packet->data() + 16, dataToSend.data(), dataToSend.size());
         
         // Track for acknowledgment
         {
@@ -314,9 +319,9 @@ void UDPNetwork::handleSendComplete(
     }
 }
 
-void UDPNetwork::processMessage(const std::string& message, const boost::asio::ip::udp::endpoint& sender) {
+void UDPNetwork::processMessage(std::vector<uint8_t> message, const boost::asio::ip::udp::endpoint& sender) {
     if (on_message_) {
-        on_message_(message);
+        on_message_(std::move(message));
     }
 }
 
@@ -339,6 +344,8 @@ std::string UDPNetwork::getLocalAddress() const {
 void UDPNetwork::startAsyncReceive() {
     if (!running_ || !socket_) return;
     
+    // Reuse the same buffer
+    // TODO: Test if only setting it once -- if (receiveBuffer_) -- makes an improvement or at least doesn't ruin performance
     receiveBuffer_ = std::make_shared<std::vector<uint8_t>>(MAX_PACKET_SIZE);
     senderEndpoint_ = std::make_shared<boost::asio::ip::udp::endpoint>();
     
@@ -442,9 +449,6 @@ void UDPNetwork::processReceivedData(std::size_t bytes_transferred) {
                 return;
             }
             
-            // Extract message
-            std::string message(reinterpret_cast<const char*>(buffer.data() + 16), msgLen);
-            
             // TODO: Separate ACK system to only hole-punching and maybe to heartbeat
             // Send ACK asynchronously
             auto ack = std::make_shared<std::vector<uint8_t>>(16);
@@ -478,12 +482,15 @@ void UDPNetwork::processReceivedData(std::size_t bytes_transferred) {
                     }
                 }
             );
+
+            // Extract wintun packet
+            std::vector<uint8_t> tunPacket(msgLen);
+            std::memcpy(tunPacket.data(), buffer.data() + 16, msgLen);
             
             // Process message on the IO thread to avoid potential deadlocks
             auto sender_copy = *senderEndpoint_;
-            auto message_copy = message;
-            boost::asio::post([this, message_copy, sender_copy]() {
-                this->processMessage(message_copy, sender_copy);
+            boost::asio::post([this, tunPacket, sender_copy]() {
+                this->processMessage(std::move(tunPacket), sender_copy);
             });
             break;
         }

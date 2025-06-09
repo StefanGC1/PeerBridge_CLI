@@ -49,7 +49,7 @@ private:
     void handleConnectionRequest(const std::string& from);
     void handlePeerInfo(const std::string& username, const std::string& ip, int port);
     void handleConnectionInit(const std::string& username, const std::string& ip, int port);
-    void handleNetworkData(const std::vector<uint8_t>& data);
+    void handleNetworkData(std::vector<uint8_t> data);
     void handlePacketFromTun(const std::vector<uint8_t>& packet);
     void handleConnectionChange(bool connected);
     
@@ -62,7 +62,7 @@ private:
     
     // Packet analysis and forwarding
     bool forwardPacketToPeer(const std::vector<uint8_t>& packet);
-    bool deliverPacketToTun(const std::vector<uint8_t>& packet);
+    bool deliverPacketToTun(std::vector<uint8_t> packet);
     
     // Members
     std::string username_;
