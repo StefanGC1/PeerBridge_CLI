@@ -101,7 +101,7 @@ int main(int argc, char* argv[]) {
     }
     std::string peer_username = "";
     
-    const std::string server_url = "wss://steam-ct-short-metabolism.trycloudflare.com";
+    const std::string server_url = "wss://sector-classic-ear-ecommerce.trycloudflare.com";
     int local_port = 0; // Let system automatically choose a port
     g_system = std::make_unique<P2PSystem>();
     

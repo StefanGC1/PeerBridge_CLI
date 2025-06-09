@@ -1,3 +1,4 @@
+#include "utils.hpp"
 #include "p2p_system.hpp"
 #include "logger.hpp"
 #include <iostream>
@@ -125,6 +126,8 @@ bool P2PSystem::initialize(const std::string& server_url, const std::string& use
         this->handlePacketFromTun(packet);
     });
 
+    networkConfigManager.setNarrowAlias(tun_->getNarrowAlias());
+
     /*
     *   UDP NETWORK SERVICE SETUP
     */
@@ -198,9 +201,11 @@ void P2PSystem::disconnect() {
         packet_handling_thread_.join();
     }
     
+    // TODO: REFACTORIZE DISCONNECT / SHUTDOWN PROCESS
     // Stop the network interface
     stopNetworkInterface();
-    
+    networkConfigManager.resetInterfaceConfiguration(peer_virtual_ip_);
+
     // Disconnect from peer
     network_->disconnect();
     signaling_.disconnect();
@@ -265,10 +270,16 @@ bool P2PSystem::startNetworkInterface() {
     }
     
     // Assign IP addresses based on host/client role
+    // TODO: TO BE MODIFIED FOR *1, this can be removed as peer info parsing will be done elsewhere
     assignIPAddresses();
+    uint8_t selfIndex = is_host_ ? 1 : 2;
     
+    NetworkConfigManager::ConnectionConfig cfg{
+        selfIndex,
+        peer_virtual_ip_
+    };
     // Set up virtual interface
-    if (!setupVirtualInterface()) {
+    if (!networkConfigManager.configureInterface(cfg)) {
         SYSTEM_LOG_ERROR("[System] Failed to set up virtual interface");
         return false;
     }
@@ -296,6 +307,7 @@ void P2PSystem::stopNetworkInterface() {
     }
 }
 
+// TODO: TO BE MODIFIED FOR *1, this can be removed as peer info parsing will be done elsewhere
 void P2PSystem::assignIPAddresses() {
     if (is_host_) {
         local_virtual_ip_ = HOST_IP;
@@ -304,102 +316,6 @@ void P2PSystem::assignIPAddresses() {
         local_virtual_ip_ = CLIENT_IP;
         peer_virtual_ip_ = HOST_IP;
     }
-}
-
-bool P2PSystem::setupVirtualInterface() {
-    // Configure the interface with IP and netmask
-    if (!tun_->configureInterface(local_virtual_ip_, VIRTUAL_NETMASK)) {
-        SYSTEM_LOG_ERROR("[System] Failed to configure interface with IP {}", local_virtual_ip_);
-        return false;
-    }
-    
-    // Set up routing
-    if (!tun_->setupRouting()) {
-        SYSTEM_LOG_ERROR("[System] Failed to set up routing");
-        return false;
-    }
-    
-    // Add firewall rule to allow traffic on the virtual network
-    std::ostringstream firewallCmd;
-    firewallCmd << "netsh advfirewall firewall add rule "
-                << "name=\"P2P Network\" "
-                << "dir=in "
-                << "action=allow "
-                << "protocol=any "
-                << "remoteip=10.0.0.0/24";
-    
-    // Execute firewall command (using our TUN interface's command helper)
-    if (!tun_->executeNetshCommand(firewallCmd.str())) {
-        SYSTEM_LOG_WARNING("[System] Failed to add inbound firewall rule. Connectivity may be limited.");
-    }
-    
-    // Add outbound rule too
-    firewallCmd.str("");
-    firewallCmd << "netsh advfirewall firewall add rule "
-                << "name=\"P2P Network (out)\" "
-                << "dir=out "
-                << "action=allow "
-                << "protocol=any "
-                << "remoteip=10.0.0.0/24";
-    
-    if (!tun_->executeNetshCommand(firewallCmd.str())) {
-        SYSTEM_LOG_WARNING("[System] Failed to add outbound firewall rule. Connectivity may be limited.");
-    }
-    
-    // Add specific rule for ICMP (ping)
-    firewallCmd.str("");
-    firewallCmd << "netsh advfirewall firewall add rule "
-                << "name=\"P2P Network ICMP\" "
-                << "dir=in "
-                << "action=allow "
-                << "protocol=icmpv4 "
-                << "remoteip=10.0.0.0/24";
-    
-    if (!tun_->executeNetshCommand(firewallCmd.str())) {
-        SYSTEM_LOG_WARNING("[System] Failed to add ICMP firewall rule. Ping may not work.");
-    }
-    
-    // Enable File and Printer Sharing (needed for some network discovery protocols)
-    firewallCmd.str("");
-    firewallCmd << "netsh advfirewall firewall set rule "
-                << "group=\"File and Printer Sharing\" "
-                << "new enable=Yes";
-    
-    if (!tun_->executeNetshCommand(firewallCmd.str())) {
-        SYSTEM_LOG_WARNING("[System] Failed to enable File and Printer Sharing. Network discovery may be limited.");
-    }
-
-    // Add specific rule for IGMP (inbound)
-    firewallCmd.str("");
-    firewallCmd << "netsh advfirewall firewall add rule "
-                << "name=\"P2P Network IGMP in\" "
-                << "dir=in "
-                << "action=allow "
-                << "protocol=2 "
-                << "remoteip=10.0.0.0/24";
-    if (!tun_->executeNetshCommand(firewallCmd.str())) {
-        SYSTEM_LOG_WARNING("[System] Failed to add outbound IGMP firewall rule. Multicast may not work.");
-    }
-
-    firewallCmd.str("");
-    firewallCmd << "netsh advfirewall firewall add rule "
-                << "name=\"P2P Network IGMP out\" "
-                << "dir=out "
-                << "action=allow "
-                << "protocol=2 "
-                << "remoteip=10.0.0.0/24";
-    if (!tun_->executeNetshCommand(firewallCmd.str())) {
-        SYSTEM_LOG_WARNING("[System] Failed to add outbound IGMP firewall rule. Multicast may not work.");
-    }
-
-    std::ostringstream netCategoryCmd;
-    netCategoryCmd << "powershell -Command \"Set-NetConnectionProfile -InterfaceAlias 'PeerBridge' -NetworkCategory Private\"";
-
-    if (!tun_->executeNetshCommand(netCategoryCmd.str())) {
-        SYSTEM_LOG_WARNING("[System] Failed to set network category to Private, LAN functionality may be limited");
-    }
-
-    return true;
 }
 
 void P2PSystem::handleConnectionRequest(const std::string& from) {
@@ -450,8 +366,8 @@ bool P2PSystem::forwardPacketToPeer(const std::vector<uint8_t>& packet) {
     uint32_t srcIp = (packet[12] << 24) | (packet[13] << 16) | (packet[14] << 8) | packet[15];
     uint32_t dstIp = (packet[16] << 24) | (packet[17] << 16) | (packet[18] << 8) | packet[19];
 
-    std::string srcIpStr = uint32ToIp(srcIp);
-    std::string dstIpStr = uint32ToIp(dstIp);
+    std::string srcIpStr = utils::uint32ToIp(srcIp);
+    std::string dstIpStr = utils::uint32ToIp(dstIp);
 
     // Forward packets that are meant for the peer OR are broadcast/multicast packets
     bool isForPeer = (dstIpStr == peer_virtual_ip_);
@@ -492,8 +408,8 @@ bool P2PSystem::deliverPacketToTun(std::vector<uint8_t> packet) {
     uint32_t srcIp = (packet[12] << 24) | (packet[13] << 16) | (packet[14] << 8) | packet[15];
     uint32_t dstIp = (packet[16] << 24) | (packet[17] << 16) | (packet[18] << 8) | packet[19];
     
-    std::string srcIpStr = uint32ToIp(srcIp);
-    std::string dstIpStr = uint32ToIp(dstIp);
+    std::string srcIpStr = utils::uint32ToIp(srcIp);
+    std::string dstIpStr = utils::uint32ToIp(dstIp);
     
     // Only deliver packets that are meant for us, are broadcast packets, or multicast packets
     bool isForUs = (dstIpStr == local_virtual_ip_);
@@ -514,25 +430,12 @@ bool P2PSystem::deliverPacketToTun(std::vector<uint8_t> packet) {
     return tun_->sendPacket(std::move(packet));
 }
 
-std::string P2PSystem::uint32ToIp(uint32_t ipAddress) {
-    std::ostringstream result;
-    
-    for (int i = 0; i < 4; i++) {
-        uint8_t octet = (ipAddress >> (8 * (3 - i))) & 0xFF;
-        result << static_cast<int>(octet);
-        if (i < 3) {
-            result << ".";
-        }
-    }
-    
-    return result.str();
-}
-
 void P2PSystem::handleConnectionChange(bool connected) {
     if (!connected)
     {
         SYSTEM_LOG_INFO("[System] Disconnected from {}", peer_username_);
 
+        // TODO: REFACTORIZE DISCONNECT / SHUTDOWN PROCESS
         // Stop the network interface
         stopNetworkInterface();
         

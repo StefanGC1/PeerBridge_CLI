@@ -38,6 +38,7 @@ set(SOURCES
     src/p2p_system.cpp
     src/tun_interface.cpp
     src/logger.cpp
+    src/networkconfigmanager.cpp
 )
 
 # Create executable

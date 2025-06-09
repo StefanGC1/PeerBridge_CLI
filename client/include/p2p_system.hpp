@@ -3,6 +3,7 @@
 #include "stun.hpp"
 #include "networking.hpp"
 #include "tun_interface.hpp"
+#include "networkconfigmanager.hpp"
 #include <string>
 #include <atomic>
 #include <thread>
@@ -55,10 +56,6 @@ private:
     
     // IP helpers
     void assignIPAddresses();
-    std::string uint32ToIp(uint32_t ipAddress);
-    
-    // P2P VPN Setup
-    bool setupVirtualInterface();
     
     // Packet analysis and forwarding
     bool forwardPacketToPeer(const std::vector<uint8_t>& packet);
@@ -81,6 +78,7 @@ private:
     std::string peer_virtual_ip_;
     
     // Components
+    NetworkConfigManager networkConfigManager;
     SignalingClient signaling_;
     StunClient stun_;
     std::unique_ptr<UDPNetwork> network_;

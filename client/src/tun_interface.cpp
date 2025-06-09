@@ -11,19 +11,7 @@
 
 #pragma comment(lib, "iphlpapi.lib")
 
-// Random number generator for MAC address
-std::random_device rd;
-std::mt19937 gen(rd());
-std::uniform_int_distribution<> dis(0, 255);
-
-TunInterface::TunInterface() {
-    // Generate a random virtual MAC address with a locally administered bit
-    virtualMac_.resize(6);
-    virtualMac_[0] = 0x02;  // Set locally administered bit
-    for (int i = 1; i < 6; i++) {
-        virtualMac_[i] = dis(gen);
-    }
-}
+TunInterface::TunInterface() {}
 
 TunInterface::~TunInterface() {
     close();
@@ -115,243 +103,6 @@ bool TunInterface::initialize(const std::string& deviceName) {
 
     clog << "WinTun adapter initialized successfully." << std::endl;
     return true;
-}
-
-bool TunInterface::configureInterface(const std::string& ipAddress, const std::string& netmask) {
-    if (!adapter) {
-        std::cerr << "Adapter not initialized" << std::endl;
-        return false;
-    }
-
-    ipAddress_ = ipAddress;
-    netmask_ = netmask;
-
-    // Get the adapter LUID
-    NET_LUID adapterLuid;
-    if (!pWintunGetAdapterLUID(adapter, &adapterLuid)) {
-        std::cerr << "Failed to get adapter LUID. Error: " << GetLastError() << std::endl;
-        return false;
-    }
-
-    // Get interface alias (friendly name) from LUID
-    WCHAR interfaceAlias[IF_MAX_STRING_SIZE + 1] = { 0 };
-    if (ConvertInterfaceLuidToAlias(&adapterLuid, interfaceAlias, IF_MAX_STRING_SIZE) != NO_ERROR) {
-        std::cerr << "Failed to get interface alias from LUID. Error: " << GetLastError() << std::endl;
-        return false;
-    }
-
-    // Convert wide string to narrow string
-    char narrowAlias[IF_MAX_STRING_SIZE + 1] = { 0 };
-    WideCharToMultiByte(CP_UTF8, 0, interfaceAlias, -1, narrowAlias, sizeof(narrowAlias), NULL, NULL);
-    
-    // Configure IP address using netsh
-    std::ostringstream command;
-    command << "netsh interface ip set address \"" << narrowAlias 
-            << "\" static " << ipAddress << " " << netmask;
-    
-    if (!executeNetshCommand(command.str())) {
-        std::cerr << "Failed to configure IP address" << std::endl;
-        return false;
-    }
-    
-    clog << "Interface configured with IP: " << ipAddress << " netmask: " << netmask << std::endl;
-    return true;
-}
-
-bool TunInterface::setupRouting() {
-    if (ipAddress_.empty() || netmask_.empty()) {
-        std::cerr << "IP address or netmask not configured" << std::endl;
-        return false;
-    }
-
-    // Convert IP address and netmask to uint32
-    uint32_t ip = ipToUint32(ipAddress_);
-    uint32_t mask = ipToUint32(netmask_);
-    
-    // Calculate network address
-    uint32_t network = ip & mask;
-    std::string networkAddr = uint32ToIp(network);
-    
-    // Get the adapter LUID
-    NET_LUID adapterLuid;
-    if (!pWintunGetAdapterLUID(adapter, &adapterLuid)) {
-        std::cerr << "Failed to get adapter LUID. Error: " << GetLastError() << std::endl;
-        return false;
-    }
-
-    // Get interface alias (friendly name) from LUID
-    WCHAR interfaceAlias[IF_MAX_STRING_SIZE + 1] = { 0 };
-    if (ConvertInterfaceLuidToAlias(&adapterLuid, interfaceAlias, IF_MAX_STRING_SIZE) != NO_ERROR) {
-        std::cerr << "Failed to get interface alias from LUID. Error: " << GetLastError() << std::endl;
-        return false;
-    }
-
-    // Convert wide string to narrow string
-    char narrowAlias[IF_MAX_STRING_SIZE + 1] = { 0 };
-    WideCharToMultiByte(CP_UTF8, 0, interfaceAlias, -1, narrowAlias, sizeof(narrowAlias), NULL, NULL);
-    
-    // Count mask bits for CIDR notation
-    int maskBits = 0;
-    uint32_t tempMask = mask;
-    while (tempMask) {
-        maskBits += (tempMask & 1);
-        tempMask >>= 1;
-    }
-    
-    // Try different approaches for adding the route
-    
-    // Approach 1: Add route using netsh with separate mask format
-    std::ostringstream command;
-    command << "netsh interface ipv4 add route " 
-            << networkAddr << " " << netmask_ 
-            << " \"" << narrowAlias << "\""
-            << " metric=1";
-
-    bool success = executeNetshCommand(command.str());
-    
-    if (!success) {
-        clog << "First route command failed, trying alternative format..." << std::endl;
-        
-        // Approach 2: Try using CIDR notation
-        command.str("");
-        command << "netsh interface ipv4 add route " 
-                << networkAddr << "/" << maskBits
-                << " \"" << narrowAlias << "\""
-                << " metric=1";
-        
-        success = executeNetshCommand(command.str());
-    }
-    
-    if (!success) {
-        clog << "Second route command failed, trying to add direct routes..." << std::endl;
-        
-        // Approach 3: Try adding a specific route to peer IP
-        // This ensures at least basic connectivity even if subnet routing fails
-        command.str("");
-        
-        // Determine peer IP based on local IP
-        std::string peerIP;
-        if (ipAddress_ == "10.0.0.1") {
-            peerIP = "10.0.0.2";
-        } else {
-            peerIP = "10.0.0.1";
-        }
-        
-        command << "netsh interface ipv4 add route " 
-                << peerIP << "/32"
-                << " \"" << narrowAlias << "\""
-                << " metric=1";
-        
-        success = executeNetshCommand(command.str());
-    }
-    
-    if (!success) {
-        std::cerr << "Failed to add route for virtual network" << std::endl;
-        return false;
-    }
-    
-    // Enable forwarding on the interface
-    command.str("");
-    command << "netsh interface ipv4 set interface \"" << narrowAlias << "\" forwarding=enabled metric=1";
-    
-    if (!executeNetshCommand(command.str())) {
-        std::cerr << "Failed to enable forwarding on interface" << std::endl;
-        return false;
-    }
-
-    // 224.0.0.0/4  →  on-link via P2PBridge, metric 1
-    command.str("");
-    command << "netsh interface ipv4 add route "
-            << "prefix=224.0.0.0/4 "
-            << "interface=\"" << narrowAlias << "\" "
-            << "metric=1";
-    if (!executeNetshCommand(command.str())) {
-        std::cerr << "Failed to add route for multicast traffic" << std::endl;
-    }
-    
-    clog << "Routing configured successfully for virtual network" << std::endl;
-    return true;
-}
-
-bool TunInterface::executeNetshCommand(const std::string& command) {
-    STARTUPINFOW si;
-    PROCESS_INFORMATION pi;
-    
-    ZeroMemory(&si, sizeof(si));
-    si.cb = sizeof(si);
-    ZeroMemory(&pi, sizeof(pi));
-    
-    // Add "cmd /c " prefix to the command to execute it via cmd
-    std::string fullCommand = "cmd /c " + command;
-    
-    SYSTEM_LOG_INFO("Executing: {}", fullCommand);
-    
-    // Convert to wide string for CreateProcessW
-    int size = MultiByteToWideChar(CP_UTF8, 0, fullCommand.c_str(), -1, NULL, 0);
-    std::vector<wchar_t> wideCommand(size);
-    MultiByteToWideChar(CP_UTF8, 0, fullCommand.c_str(), -1, wideCommand.data(), size);
-    
-    // Create the process (use CreateProcessW for wide strings)
-    if (!CreateProcessW(NULL, wideCommand.data(), NULL, NULL, FALSE, 
-                      CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
-        std::cerr << "Failed to execute command: " << command << std::endl;
-        std::cerr << "Windows error: " << GetLastError() << std::endl;
-        return false;
-    }
-    
-    // Wait for the process to finish
-    WaitForSingleObject(pi.hProcess, INFINITE);
-    
-    // Get the exit code
-    DWORD exitCode;
-    if (!GetExitCodeProcess(pi.hProcess, &exitCode)) {
-        std::cerr << "Failed to get process exit code" << std::endl;
-        CloseHandle(pi.hProcess);
-        CloseHandle(pi.hThread);
-        return false;
-    }
-    
-    // Clean up handles
-    CloseHandle(pi.hProcess);
-    CloseHandle(pi.hThread);
-    
-    if (exitCode != 0) {
-        std::cerr << "Command failed with exit code: " << exitCode << std::endl;
-        std::cerr << "Windows error: " << GetLastError() << std::endl;
-    }
-    
-    return exitCode == 0;
-}
-
-uint32_t TunInterface::ipToUint32(const std::string& ipAddress) {
-    uint32_t result = 0;
-    
-    // Parse IP address
-    std::istringstream iss(ipAddress);
-    std::string octet;
-    int i = 0;
-    
-    while (std::getline(iss, octet, '.') && i < 4) {
-        uint32_t value = std::stoi(octet);
-        result = (result << 8) | (value & 0xFF);
-        i++;
-    }
-    
-    return result;
-}
-
-std::string TunInterface::uint32ToIp(uint32_t ipAddress) {
-    std::ostringstream result;
-    
-    for (int i = 0; i < 4; i++) {
-        uint8_t octet = (ipAddress >> (8 * (3 - i))) & 0xFF;
-        result << static_cast<int>(octet);
-        if (i < 3) {
-            result << ".";
-        }
-    }
-    
-    return result.str();
 }
 
 bool TunInterface::startPacketProcessing() {
@@ -506,10 +257,22 @@ void TunInterface::close() {
     clog << "TUN interface closed" << std::endl;
 }
 
-std::string TunInterface::getIPAddress() const {
-    return ipAddress_;
-}
+std::string TunInterface::getNarrowAlias() const {
+    NET_LUID adapterLuid;
+    if (!pWintunGetAdapterLUID(adapter, &adapterLuid)) {
+        std::cerr << "Failed to get adapter LUID. Error: " << GetLastError() << std::endl;
+        return "";
+    }
 
-std::vector<uint8_t> TunInterface::getVirtualMacAddress() const {
-    return virtualMac_;
+    // Get interface alias (friendly name) from LUID
+    WCHAR interfaceAlias[IF_MAX_STRING_SIZE + 1] = { 0 };
+    if (ConvertInterfaceLuidToAlias(&adapterLuid, interfaceAlias, IF_MAX_STRING_SIZE) != NO_ERROR) {
+        std::cerr << "Failed to get interface alias from LUID. Error: " << GetLastError() << std::endl;
+        return "";
+    }
+
+    // Convert wide string to narrow string
+    char narrowAlias[IF_MAX_STRING_SIZE + 1] = { 0 };
+    WideCharToMultiByte(CP_UTF8, 0, interfaceAlias, -1, narrowAlias, sizeof(narrowAlias), NULL, NULL);
+    return std::string(narrowAlias);
 }

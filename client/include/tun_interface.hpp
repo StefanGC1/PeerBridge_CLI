@@ -1,5 +1,4 @@
-#ifndef TUN_INTERFACE_H
-#define TUN_INTERFACE_H
+#pragma once
 
 #include <string>
 #include <Windows.h>
@@ -44,12 +43,6 @@ public:
     // Initialize the TUN interface with a specified device name
     bool initialize(const std::string& deviceName);
 
-    // Configure the TUN interface with an IP address, netmask, and gateway
-    bool configureInterface(const std::string& ipAddress, const std::string& netmask);
-
-    // Set up routing for the TUN interface
-    bool setupRouting();
-
     // Start and stop packet processing
     bool startPacketProcessing();
     void stopPacketProcessing();
@@ -66,14 +59,7 @@ public:
     // Close and clean up the TUN interface
     void close();
 
-    // Get the IP address of the interface
-    std::string getIPAddress() const;
-
-    // Get the local MAC address (for ARP responses)
-    std::vector<uint8_t> getVirtualMacAddress() const;
-
-    // Execute a netsh command to configure the interface
-    bool executeNetshCommand(const std::string& command);
+    std::string getNarrowAlias() const;
 
 private:
     // Wintun session and adapter
@@ -119,22 +105,11 @@ private:
     // Callback for received packets
     PacketCallback packetCallback_;
     
-    // Configuration
-    std::string ipAddress_;
-    std::string netmask_;
-    std::vector<uint8_t> virtualMac_;
-    
     // Interface management
     bool loadWintunFunctions(HMODULE wintunModule);
     void receiveThreadFunc();
     void sendThreadFunc();
     
-    // IP helper functions
-    uint32_t ipToUint32(const std::string& ipAddress);
-    std::string uint32ToIp(uint32_t ipAddress);
-    
     // System's network interfaces
     HMODULE wintunModule_ = nullptr;
 };
-
-#endif // TUN_INTERFACE_H

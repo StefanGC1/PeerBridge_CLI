@@ -345,8 +345,9 @@ void UDPNetwork::startAsyncReceive() {
     if (!running_ || !socket_) return;
     
     // Reuse the same buffer
-    // TODO: Test if only setting it once -- if (receiveBuffer_) -- makes an improvement or at least doesn't ruin performance
-    receiveBuffer_ = std::make_shared<std::vector<uint8_t>>(MAX_PACKET_SIZE);
+    // TODO: Remove if in case this causes problems
+    if (!receiveBuffer_)
+        receiveBuffer_ = std::make_shared<std::vector<uint8_t>>(MAX_PACKET_SIZE);
     senderEndpoint_ = std::make_shared<boost::asio::ip::udp::endpoint>();
     
     socket_->async_receive_from(
