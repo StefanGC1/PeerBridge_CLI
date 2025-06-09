@@ -116,10 +116,12 @@ void SignalingClient::handleJsonMessage(const nlohmann::json& data) {
     else if (type == "chat-request") {
         std::string from = data["from"];
         clog << "[Request] " << from << " wants to chat." << std::endl;
-        
+
         if (onChatRequest_) {
             onChatRequest_(from);
         }
+        SYSTEM_LOG_INFO("[Request] {} wants to connect with you.", from);
+        SYSTEM_LOG_INFO("Type /accept to accept or /reject to decline.");
     }
     else if (type == "chat-init") {
         std::string peer_ip = data["ip"];

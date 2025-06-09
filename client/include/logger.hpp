@@ -77,6 +77,7 @@ public:
 
     bool tryLog() noexcept
     {
+        std::lock_guard<std::mutex> lock(mutex_);
         auto now = std::chrono::steady_clock::now();
         std::chrono::duration<double> delta = now - lastTime;
         lastTime = now;
@@ -94,6 +95,7 @@ private:
     double rate;
     double tokens;
     std::chrono::steady_clock::time_point lastTime;
+    std::mutex mutex_;
 };
 
 void initLogging(bool = false);
@@ -110,10 +112,14 @@ inline TrafficLogLimiter& logLimiter()
 #define SYSTEM_LOG_WARNING(fmt, ...) QUILL_LOG_WARNING(sysLogger(), fmt, ##__VA_ARGS__)
 #define SYSTEM_LOG_ERROR(fmt, ...) QUILL_LOG_ERROR(sysLogger(), fmt, ##__VA_ARGS__)
 
-#define NETWORK_TRAFFIC_LOG(fmt, ...)                        \
-    do {                                                     \
-        if (shouldLogNetTraffic && logLimiter().tryLog())    \
-            QUILL_LOG_INFO(netLogger(), fmt, ##__VA_ARGS__); \
+// Too lazy to make this look better :/
+#define NETWORK_TRAFFIC_LOG(fmt, ...)                               \
+    do {                                                            \
+        if (shouldLogNetTraffic)                                    \
+        {                                                           \
+            if (logLimiter().tryLog())                              \
+                QUILL_LOG_INFO(netLogger(), fmt, ##__VA_ARGS__);    \
+        }                                                           \
     } while (0);
 
 #define NETWORK_LOG_INFO(fmt, ...) QUILL_LOG_INFO(netLogger(), fmt, ##__VA_ARGS__)

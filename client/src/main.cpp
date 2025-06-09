@@ -103,12 +103,6 @@ int main(int argc, char* argv[]) {
     int local_port = 0; // Let system automatically choose a port
     g_system = std::make_unique<P2PSystem>();
     
-    // Setup callbacks
-    g_system->setConnectionRequestCallback([](const std::string& from) {
-        SYSTEM_LOG_INFO("[Request] {} wants to connect with you.", from);
-        SYSTEM_LOG_INFO("Type /accept to accept or /reject to decline.");
-    });
-    
     // Initialize the application
     if (!g_system->initialize(server_url, username, local_port)) {
         SYSTEM_LOG_ERROR("Failed to initialize the application. Exiting.");

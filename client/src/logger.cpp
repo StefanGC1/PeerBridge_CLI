@@ -139,7 +139,11 @@ void initLogging(bool shouldLogTraffic)
     const std::string logsPath = initializeLogDirectory();
 
     using namespace quill;
-    Backend::start();
+
+    // Configure the backend thread to sleep instead of busy-spinning
+    BackendOptions cfg;
+    cfg.sleep_duration = std::chrono::milliseconds(1);
+    Backend::start(cfg);
 
     auto consoleSink = Frontend::create_or_get_sink<ConsoleSink>("console", dimConsoleColours());
     auto sysSink = Frontend::create_or_get_sink<FileSink>(

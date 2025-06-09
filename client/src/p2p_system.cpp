@@ -87,7 +87,7 @@ bool P2PSystem::initialize(const std::string& server_url, const std::string& use
             this->signaling_.sendGreeting();
         }
     });
-    
+
     signaling_.setChatRequestCallback([this](const std::string& from) {
         this->handleConnectionRequest(from);
     });
@@ -399,16 +399,12 @@ bool P2PSystem::setupVirtualInterface() {
     if (!tun_->executeNetshCommand(netCategoryCmd.str())) {
         SYSTEM_LOG_WARNING("[System] Failed to set network category to Private, LAN functionality may be limited");
     }
-    
+
     return true;
 }
 
 void P2PSystem::handleConnectionRequest(const std::string& from) {
     pending_request_from_ = from;
-    
-    if (on_connection_request_) {
-        on_connection_request_(from);
-    }
 }
 
 void P2PSystem::handlePeerInfo(const std::string& username, const std::string& ip, int port) {
@@ -557,7 +553,3 @@ void P2PSystem::handleConnectionChange(bool connected) {
     }
     SYSTEM_LOG_INFO("[System] Virtual network is now active. You can use standard networking tools (ping, etc.)");
 }
-
-void P2PSystem::setConnectionRequestCallback(ConnectionRequestCallback callback) {
-    on_connection_request_ = std::move(callback);
-} 

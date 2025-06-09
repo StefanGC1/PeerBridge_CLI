@@ -10,6 +10,7 @@
 #include <memory>
 #include <vector>
 #include <mutex>
+#include <condition_variable>
 #include <queue>
 #include <boost/asio.hpp>
 
@@ -108,6 +109,7 @@ private:
     // State management
     std::atomic<bool> running_{false};
     std::mutex packetQueueMutex_;
+    std::condition_variable packetCondition_;
     std::queue<std::vector<uint8_t>> outgoingPackets_;
     
     // Thread for packet processing

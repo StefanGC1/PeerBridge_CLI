@@ -445,6 +445,7 @@ void UDPNetwork::processReceivedData(std::size_t bytes_transferred) {
             // Extract message
             std::string message(reinterpret_cast<const char*>(buffer.data() + 16), msgLen);
             
+            // TODO: Separate ACK system to only hole-punching and maybe to heartbeat
             // Send ACK asynchronously
             auto ack = std::make_shared<std::vector<uint8_t>>(16);
             

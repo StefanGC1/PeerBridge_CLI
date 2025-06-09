@@ -419,13 +419,22 @@ void TunInterface::sendThreadFunc() {
     while (running_) {
         std::vector<uint8_t> packetData;
         
-        // Get a packet from the queue
+        // Wait for packet or timeout (500μs for gaming responsiveness)
         {
-            std::lock_guard<std::mutex> lock(packetQueueMutex_);
+            std::unique_lock<std::mutex> lock(packetQueueMutex_);
+            
+            if (packetCondition_.wait_for(lock, std::chrono::microseconds(500), 
+                [this] { return !outgoingPackets_.empty() || !running_; })) {
+                
+                // Got signaled - packet available or shutting down
+                if (!running_) break;
+                
             if (!outgoingPackets_.empty()) {
                 packetData = std::move(outgoingPackets_.front());
                 outgoingPackets_.pop();
             }
+            }
+            // If timeout occurred, continue loop (keeps thread responsive)
         }
         
         if (!packetData.empty()) {
@@ -442,9 +451,6 @@ void TunInterface::sendThreadFunc() {
                 // Send the packet
                 pWintunSendPacket(session, packet);
             }
-        } else {
-            // No packet available, sleep for a bit
-            std::this_thread::sleep_for(std::chrono::microseconds(5));
         }
     }
 }
@@ -455,11 +461,12 @@ bool TunInterface::sendPacket(const std::vector<uint8_t>& packet) {
         return false;
     }
     
-    // Add the packet to the queue
+    // Add the packet to the queue and notify the send thread
     {
         std::lock_guard<std::mutex> lock(packetQueueMutex_);
         outgoingPackets_.push(packet);
     }
+    packetCondition_.notify_one();
     
     return true;
 }

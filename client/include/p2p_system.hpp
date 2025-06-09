@@ -40,10 +40,6 @@ public:
     // Connection request handling
     void acceptIncomingRequest();
     void rejectIncomingRequest();
-
-    using ConnectionRequestCallback = std::function<void(const std::string&)>;
-
-    void setConnectionRequestCallback(ConnectionRequestCallback callback);
     
 private:
     // Network discovery
@@ -101,7 +97,4 @@ private:
     std::string peer_username_;
     std::string peer_ip_;
     int peer_port_;
-    
-    // Callbacks
-    ConnectionRequestCallback on_connection_request_;
 }; 
