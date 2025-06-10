@@ -6,6 +6,8 @@
 #include <atomic>
 #include <mutex>
 #include <signal.h>
+#include <csignal>
+#include <boost/stacktrace.hpp>
 
 // Global variables
 static std::atomic<bool> g_running = true;
@@ -15,6 +17,44 @@ static std::unique_ptr<P2PSystem> g_system;
 // Signal handler for graceful shutdown
 void signal_handler(int signal) {
     g_running = false;
+}
+
+static std::string stacktrace_to_string()
+{
+    std::ostringstream oss;
+    oss << boost::stacktrace::stacktrace();
+    return oss.str();
+}
+
+static void on_terminate()
+{
+    // if there’s an active exception, try to get its what()
+    if (auto eptr = std::current_exception())
+    {
+        try { std::rethrow_exception(eptr); }
+        catch (std::exception const& ex)
+        {
+            SYSTEM_LOG_ERROR("Unhandled exception: {}", ex.what());
+        }
+        catch (...)
+        {
+            SYSTEM_LOG_ERROR("Unhandled non-std exception");
+        }
+    }
+    else
+    {
+        SYSTEM_LOG_ERROR("Terminate called without an exception");
+    }
+    SYSTEM_LOG_ERROR("Stack trace:\n{}", stacktrace_to_string());
+    std::_Exit(EXIT_FAILURE);  // immediate exit
+}
+
+// Called on fatal signals
+static void on_signal(int sig)
+{
+    SYSTEM_LOG_ERROR("Received signal: {}", sig);
+    SYSTEM_LOG_ERROR("Stack trace:\n{}", stacktrace_to_string());
+    std::_Exit(EXIT_FAILURE);
 }
 
 void print_usage() {
@@ -84,8 +124,14 @@ void input_thread_func() {
 
 int main(int argc, char* argv[]) {
     // Setup signal handlers
+    std::set_terminate(on_terminate);
+
     signal(SIGINT, signal_handler);
-    signal(SIGTERM, signal_handler);
+    std::signal(SIGSEGV, on_signal);
+    std::signal(SIGABRT, on_signal);
+    std::signal(SIGFPE, on_signal);
+    std::signal(SIGILL, on_signal);
+    std::signal(SIGTERM, on_signal);
     
     // TODO: Disable network traffic logging in prod
     initLogging();

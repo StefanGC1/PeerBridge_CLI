@@ -7,8 +7,10 @@
 #include <mutex>
 #include <queue>
 #include <chrono>
+#include <optional>
 #include <unordered_map>
 #include <boost/asio.hpp>
+#include <boost/asio/executor_work_guard.hpp>
 #include "systemstatemanager.hpp"
 
 class UDPNetwork {
@@ -18,8 +20,7 @@ public:
     UDPNetwork(
         std::unique_ptr<boost::asio::ip::udp::socket> socket,
         boost::asio::io_context& context,
-        std::shared_ptr<SystemStateManager> state_manager,
-        std::shared_ptr<PeerConnectionInfo> peer_info
+        std::shared_ptr<SystemStateManager> state_manager
     );
     ~UDPNetwork();
     
@@ -27,9 +28,9 @@ public:
     bool startListening(int port);
     bool connectToPeer(const std::string& ip, int port);
     
-    // New separated disconnect functions
-    void stopConnection();   // Just stop current peer connection
-    void shutdown();         // Full shutdown of network subsystem
+    // Disconnet and shutdown
+    void stopConnection();
+    void shutdown();
     
     bool isConnected() const;
     
@@ -47,9 +48,13 @@ public:
 private:
     // Async operations
     void startAsyncReceive();
-    void handleReceiveFrom(const boost::system::error_code& error, std::size_t bytes_transferred);
+    void handleReceiveFrom(const boost::system::error_code& error, std::size_t bytes_transferred, 
+                          std::shared_ptr<std::vector<uint8_t>> receiveBuffer, 
+                          std::shared_ptr<boost::asio::ip::udp::endpoint> senderEndpoint);
     void handleSendComplete(const boost::system::error_code& error, std::size_t bytes_sent, uint32_t seq);
-    void processReceivedData(std::size_t bytes_transferred);
+    void processReceivedData(std::size_t bytes_transferred, 
+                           std::shared_ptr<std::vector<uint8_t>> receiveBuffer, 
+                           std::shared_ptr<boost::asio::ip::udp::endpoint> senderEndpoint);
     
     // Internal disconnect handler
     void handleDisconnect();
@@ -60,7 +65,8 @@ private:
     void processMessage(std::vector<uint8_t> message, const boost::asio::ip::udp::endpoint& sender);
     
     // Connection management
-    void checkConnectionStatus();
+    void checkAllConnections();
+    void notifyConnectionEvent(NetworkEvent event, const std::string& endpoint = "");
     
     // Constants
     static constexpr size_t MAX_PACKET_SIZE = 65507; // Max UDP packet size
@@ -81,12 +87,13 @@ private:
     std::string local_address_;
     
     boost::asio::io_context& io_context_;
+    std::optional<boost::asio::executor_work_guard<
+        boost::asio::io_context::executor_type>> workGuard;
+
     std::unique_ptr<boost::asio::ip::udp::socket> socket_;
     boost::asio::ip::udp::endpoint peer_endpoint_;
     
-    // Async operation buffers and state
-    std::shared_ptr<std::vector<uint8_t>> receiveBuffer_;
-    std::shared_ptr<boost::asio::ip::udp::endpoint> senderEndpoint_;
+    // Async operation state
     std::thread io_thread_;
 
     std::thread keepalive_thread_;
@@ -97,9 +104,12 @@ private:
     std::unordered_map<uint32_t, std::chrono::time_point<std::chrono::steady_clock>> pending_acks_;
     std::mutex pending_acks_mutex_;
     
-    // New state managers
+    // Peer connection management
+    PeerConnectionInfo peer_connection_;  // Changed from shared_ptr to concrete object
+    std::string current_peer_endpoint_;   // For event identification
+    
+    // State manager for event queuing
     std::shared_ptr<SystemStateManager> state_manager_;
-    std::shared_ptr<PeerConnectionInfo> peer_info_;
     
     // Callbacks
     MessageCallback on_message_;

@@ -90,7 +90,7 @@ bool TunInterface::initialize(const std::string& deviceName) {
     }
 
     // Start a Wintun session
-    const DWORD WINTUN_RING_CAPACITY = 0x400000; // 4 MiB
+    const DWORD WINTUN_RING_CAPACITY = 0x800000; // 8 MiB
     session = pWintunStartSession(adapter, WINTUN_RING_CAPACITY);
     if (!session) {
         std::cerr << "Failed to start Wintun session. Error: " << GetLastError() << std::endl;
@@ -173,20 +173,20 @@ void TunInterface::sendThreadFunc() {
     while (running_) {
         std::vector<uint8_t> packetData;
         
-        // Wait for packet or timeout (500μs for gaming responsiveness)
+        // Wait for packet or timeout
         {
             std::unique_lock<std::mutex> lock(packetQueueMutex_);
             
-            if (packetCondition_.wait_for(lock, std::chrono::microseconds(500), 
-                [this] { return !outgoingPackets_.empty() || !running_; })) {
-                
+            if (packetCondition_.wait_for(lock, std::chrono::microseconds(100), 
+                [this] { return !outgoingPackets_.empty() || !running_; })) 
+            {
                 // Got signaled - packet available or shutting down
                 if (!running_) break;
                 
-            if (!outgoingPackets_.empty()) {
-                packetData = std::move(outgoingPackets_.front());
-                outgoingPackets_.pop();
-            }
+                if (!outgoingPackets_.empty()) {
+                    packetData = std::move(outgoingPackets_.front());
+                    outgoingPackets_.pop();
+                }
             }
             // If timeout occurred, continue loop (keeps thread responsive)
         }

@@ -9,11 +9,10 @@
 UDPNetwork::UDPNetwork(
     std::unique_ptr<boost::asio::ip::udp::socket> socket,
     boost::asio::io_context& context,
-    std::shared_ptr<SystemStateManager> state_manager,
-    std::shared_ptr<PeerConnectionInfo> peer_info) 
+    std::shared_ptr<SystemStateManager> state_manager) 
     : running_(false), local_port_(0), next_sequence_number_(0)
     , socket_(std::move(socket)), io_context_(context)
-    , state_manager_(state_manager), peer_info_(peer_info)
+    , state_manager_(state_manager)
 {
 }
 
@@ -23,45 +22,56 @@ UDPNetwork::~UDPNetwork() {
 
 bool UDPNetwork::startListening(int port) {
     try {
+        if (io_context_.stopped())
+        {
+            NETWORK_LOG_INFO("[Network] IO context is stopped, restarting...");
+            io_context_.restart();
+        }
         // Get local endpoint information
         boost::asio::ip::udp::endpoint local_endpoint = socket_->local_endpoint();
         local_address_ = local_endpoint.address().to_string();
         local_port_ = local_endpoint.port();
         
-        // Set socket to non-blocking mode for async operations
-        socket_->non_blocking(true);
-        
         // Increase socket buffer sizes
-        boost::asio::socket_base::send_buffer_size sendBufferOption(1024 * 1024); // 1MB
-        boost::asio::socket_base::receive_buffer_size recvBufferOption(1024 * 1024); // 1MB
+        boost::asio::socket_base::send_buffer_size sendBufferOption(2 * 1024 * 1024); // 2MB
+        boost::asio::socket_base::receive_buffer_size recvBufferOption(2 * 1024 * 1024); // 2MB
         socket_->set_option(sendBufferOption);
         socket_->set_option(recvBufferOption);
         
         // Set running flag to true
         running_ = true;
+
+        // TODO: REMOVE WORK GUARD FUNCTIONALITY IN CASE CONNECTIO PROBLEMS STILL ARISE
+        NETWORK_LOG_INFO("[Network] Creating work guard");
+        if (!workGuard)
+            workGuard.emplace(boost::asio::make_work_guard(io_context_));
+        NETWORK_LOG_INFO("[Network] Work guard created successfully");
         
         // Start async receiving
+        NETWORK_LOG_INFO("[Network] Starting async receive");
         startAsyncReceive();
+        NETWORK_LOG_INFO("[Network] Async receive started");
         
         // Start IO thread to handle asynchronous operations
         if (!io_thread_.joinable()) {
+            NETWORK_LOG_INFO("[Network] Starting IOContext thread");
             io_thread_ = std::thread([this]() {
+                #ifdef _WIN32
+                SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
+                #endif
                 try {
-                    while (!state_manager_->isInState(SystemState::SHUTTING_DOWN)) {
-                        try {
-                            io_context_.run_for(std::chrono::milliseconds(100));
-                            io_context_.restart();
-                        } catch (const std::exception& e) {
-                            std::cerr << "[Network] IO context error: " << e.what() << std::endl;
-                        }
-                    }
+                    NETWORK_LOG_INFO("[Network] IO thread started, running io context");
+                    // This will keep running tasks until the work guard is reset / destroyed
+                    size_t handlers_run = io_context_.run();
+                    NETWORK_LOG_INFO("[Network] IO context finished running, {} handlers executed", handlers_run);
                 } catch (const std::exception& e) {
                     std::cerr << "[Network] IO thread error: " << e.what() << std::endl;
+                    NETWORK_LOG_ERROR("[Network] IO thread error: {}", e.what());
                 }
             });
         }
         
-        clog << "[Network] Listening on UDP " << local_address_ << ":" << local_port_ << std::endl;
+        SYSTEM_LOG_INFO("[Network] Listening on UDP {}:{}", local_address_, local_port_);
         return true;
     } catch (const std::exception& e) {
         std::cerr << "[Network] Failed to start UDP listener: " << e.what() << std::endl;
@@ -69,17 +79,29 @@ bool UDPNetwork::startListening(int port) {
     }
 }
 
-bool UDPNetwork::connectToPeer(const std::string& ip, int port) {
-    if (peer_info_->isConnected()) {
+bool UDPNetwork::connectToPeer(const std::string& ip, int port)
+{
+    if (peer_connection_.isConnected())
+    {
         std::cout << "[Network] Already connected to a peer." << std::endl;
         return false;
     }
     
-    try {
+    try
+    {
         boost::asio::ip::address addr = boost::asio::ip::make_address(ip);
         peer_endpoint_ = boost::asio::ip::udp::endpoint(addr, port);
-        
-        std::cout << "[Network] Starting UDP hole punching to " << ip << ":" << port << "..." << std::endl;
+        current_peer_endpoint_ = ip + ":" + std::to_string(port);
+
+        if (!workGuard)
+        {
+            NETWORK_LOG_INFO("[Network] Work guard not initialized, creating work guard");
+            workGuard.emplace(boost::asio::make_work_guard(io_context_));
+            NETWORK_LOG_INFO("[Network] Work guard created successfully");
+        }
+
+        NETWORK_LOG_INFO("[Network] Starting UDP hole punching to {}:{}", ip, port);
+        running_ = true;
         
         // Update system state
         state_manager_->setState(SystemState::CONNECTING);
@@ -87,12 +109,13 @@ bool UDPNetwork::connectToPeer(const std::string& ip, int port) {
         // Start the hole punching process
         startHolePunchingProcess(peer_endpoint_);
         
-        // Mark as connected and update peer info
-        peer_info_->setConnected(true);
+        // NOTE: Don't mark as connected here - wait for first valid packet from peer
+        // This will be done in processReceivedData when we receive the first packet
         
         return true;
-    } catch (const std::exception& e) {
-        std::cerr << "[Network] Connect error: " << e.what() << std::endl;
+    } catch (const std::exception& e)
+    {
+        NETWORK_LOG_ERROR("[Network] Connect error: {}", e.what());
         return false;
     }
 }
@@ -106,27 +129,28 @@ void UDPNetwork::startHolePunchingProcess(const boost::asio::ip::udp::endpoint& 
     
     // Start keepalive thread
     keepalive_thread_ = std::thread([this]() {
-        while (running_ && peer_info_->isConnected()) {
+        while (running_) {  // Only check running_ flag
             // Send hole punch packet
-            if (peer_info_->isConnected()) {
-                this->sendHolePunchPacket();
-            }
+            NETWORK_LOG_INFO("[Network] Sending keep-alive packet to peer: {}", peer_endpoint_.address().to_string());
+            this->sendHolePunchPacket();
             
-            // Check connection status
-            this->checkConnectionStatus();
+            // Check connection status only if we're supposed to be connected
+            if (peer_connection_.isConnected()) {
+                this->checkAllConnections();
+            }
             
             // Sleep for a short period
             std::this_thread::sleep_for(std::chrono::seconds(3));
         }
+        NETWORK_LOG_INFO("[Network] Keep-alive thread exiting");
     });
-    keepalive_thread_.detach();
 }
 
 void UDPNetwork::sendHolePunchPacket() {
     try {
+        NETWORK_LOG_INFO("[Network] Sending hole-punch / keep-alive packet to peer: {}", peer_endpoint_.address().to_string());
         // Create hole-punch packet with shared ownership
         auto packet = std::make_shared<std::vector<uint8_t>>(16);
-        
         // Set magic number
         (*packet)[0] = (MAGIC_NUMBER >> 24) & 0xFF;
         (*packet)[1] = (MAGIC_NUMBER >> 16) & 0xFF;
@@ -154,22 +178,44 @@ void UDPNetwork::sendHolePunchPacket() {
                 if (error && error != boost::asio::error::operation_aborted && 
                     error != boost::asio::error::would_block &&
                     error.value() != 10035) { // WSAEWOULDBLOCK
-                    std::cerr << "[Network] Error sending hole-punch packet: " << error.message()
-                              << " with error code: " << error.value() << std::endl;
+                    NETWORK_LOG_ERROR("[Network] Error sending hole-punch packet: {}, with error code: {}", error.message(), error.value());
                 }
             }
         );
     } catch (const std::exception& e) {
-        std::cerr << "[Network] Error preparing hole-punch packet: " << e.what() << std::endl;
+        SYSTEM_LOG_ERROR("[Network] Error preparing hole-punch packet: {}", e.what());
+        NETWORK_LOG_ERROR("[Network] Error preparing hole-punch packet: {}", e.what());
     }
 }
 
-void UDPNetwork::checkConnectionStatus() {
-    if (peer_info_->hasTimedOut(10)) {
-        clog << "[Network] Connection timeout. No packets received for over 10 seconds." << std::endl;
+void UDPNetwork::checkAllConnections() {
+    if (peer_connection_.hasTimedOut(10)) {
+        auto last_activity = peer_connection_.getLastActivity();
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - last_activity).count();
         
-        // Handle disconnection
-        handleDisconnect();
+        SYSTEM_LOG_ERROR("[Network] Connection timeout. No packets received for {} seconds (threshold: 10s).", elapsed);
+        NETWORK_LOG_ERROR("[Network] Connection timeout. No packets received for {} seconds (threshold: 10s).", elapsed);
+        
+        // Mark as disconnected
+        peer_connection_.setConnected(false);
+        
+        // Notify ALL_PEERS_DISCONNECTED for single peer setup
+        notifyConnectionEvent(NetworkEvent::ALL_PEERS_DISCONNECTED);
+        
+        // TODO: Comment out when implementing multi-peer
+        // if (!hasActiveConnections()) {
+        //     notifyConnectionEvent(NetworkEvent::ALL_PEERS_DISCONNECTED);
+        // }
+    }
+}
+
+void UDPNetwork::notifyConnectionEvent(NetworkEvent event, const std::string& endpoint) {
+    SYSTEM_LOG_INFO("[Network] Shouldn't be here often");
+    if (endpoint.empty()) {
+        state_manager_->queueEvent(NetworkEventData(event));
+    } else {
+        state_manager_->queueEvent(NetworkEventData(event, endpoint));
     }
 }
 
@@ -178,28 +224,49 @@ void UDPNetwork::stopConnection() {
     // Send disconnect notification to peer
     sendDisconnectNotification();
 
+    // Update state first to stop keep-alive thread gracefully
+    peer_connection_.setConnected(false);
+
+    running_ = false;
+
     if (keepalive_thread_.joinable()) {
         keepalive_thread_.join();
+    } else {
+        NETWORK_LOG_ERROR("[Network] Keep-alive thread not joinable");
+    }
+
+    if (workGuard) {
+        workGuard->reset();
+    } else {
+        NETWORK_LOG_ERROR("[Network] Work guard not initialized");
     }
     
-    // Update state
-    peer_info_->setConnected(false);
     state_manager_->setState(SystemState::IDLE);
     
-    clog << "[Network] Stopped connection to peer" << std::endl;
+    SYSTEM_LOG_INFO("[Network] Stopped connection to peer");
+    NETWORK_LOG_INFO("[Network] Stopped connection to peer");
 }
 
 // New implementation: Full network subsystem shutdown
 void UDPNetwork::shutdown() {
     // First stop any active connection
-    if (peer_info_->isConnected()) {
+    if (peer_connection_.isConnected()) {
         stopConnection();
     }
     
     // Then shut down the network stack
     running_ = false;
     state_manager_->setState(SystemState::SHUTTING_DOWN);
-    
+
+    // Wait for keep-alive thread to finish if it's still running
+    if (keepalive_thread_.joinable()) {
+        keepalive_thread_.join();
+    }
+
+    if (workGuard) {
+        workGuard->reset();
+    }
+
     if (socket_) {
         try {
             // Cancel any pending async operations
@@ -209,22 +276,25 @@ void UDPNetwork::shutdown() {
         } catch (...) {}
     }
     
+    // Stop io_context 
+    io_context_.stop();
+
     if (io_thread_.joinable()) {
         io_thread_.join();
     }
     
-    // Stop io_context 
-    io_context_.stop();
-    
-    clog << "[Network] Network subsystem shut down" << std::endl;
+    SYSTEM_LOG_INFO("[Network] Network subsystem shut down");
 }
 
 // New implementation: Send a disconnect notification packet to peer
 void UDPNetwork::sendDisconnectNotification() {
     try {
-        if (!peer_info_->isConnected() || !socket_) {
+        if (!peer_connection_.isConnected() || !socket_) {
             return; // No connection to notify
         }
+
+        SYSTEM_LOG_INFO("[Network] Sending disconnect notification to peer");
+        NETWORK_LOG_INFO("[Network] Sending disconnect notification to peer");
         
         // Create disconnect packet
         auto packet = std::make_shared<std::vector<uint8_t>>(16);
@@ -260,17 +330,19 @@ void UDPNetwork::sendDisconnectNotification() {
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
         }
     } catch (const std::exception& e) {
-        std::cerr << "[Network] Error sending disconnect notification: " << e.what() << std::endl;
+        SYSTEM_LOG_ERROR("[Network] Error sending disconnect notification: {}", e.what());
+        NETWORK_LOG_ERROR("[Network] Error sending disconnect notification: {}", e.what());
     }
 }
 
 bool UDPNetwork::isConnected() const {
-    return peer_info_->isConnected();
+    return peer_connection_.isConnected();
 }
 
 bool UDPNetwork::sendMessage(const std::vector<uint8_t>& dataToSend) {
     if (!running_ || !socket_) {
-        std::cerr << "[Network] Cannot send message: socket not available or system not running (disconnected)" << std::endl;
+        SYSTEM_LOG_ERROR("[Network] Cannot send message: socket not available or system not running (disconnected)");
+        NETWORK_LOG_ERROR("[Network] Cannot send message: socket not available or system not running (disconnected)");
         return false;
     }
     
@@ -278,7 +350,7 @@ bool UDPNetwork::sendMessage(const std::vector<uint8_t>& dataToSend) {
         // Calculate total packet size: header (16 bytes) + message
         size_t packetSize = 16 + dataToSend.size();
         if (packetSize > MAX_PACKET_SIZE) {
-            std::cerr << "[Network] Message too large, max size is " << (MAX_PACKET_SIZE - 16) << " bytes" << std::endl;
+            NETWORK_LOG_ERROR("[Network] Message too large, max size is {}", (MAX_PACKET_SIZE - 16));
             return false;
         }
         
@@ -335,7 +407,8 @@ bool UDPNetwork::sendMessage(const std::vector<uint8_t>& dataToSend) {
         
         return true;
     } catch (const std::exception& e) {
-        std::cerr << "[Network] Send preparation error: " << e.what() << std::endl;
+        SYSTEM_LOG_ERROR("[Network] Send preparation error: {}", e.what());
+        NETWORK_LOG_ERROR("[Network] Send preparation error: {}", e.what());
         return false;
     }
 }
@@ -351,7 +424,7 @@ void UDPNetwork::handleSendComplete(
             error.value() == 10035) {  // WSAEWOULDBLOCK
             
             // Retry after a short delay - this handles buffer full condition
-            std::cerr << "[Network] Send buffer full, retrying after delay" << std::endl;
+            NETWORK_LOG_INFO("[Network] Send buffer full, retrying after delay");
             
             auto packet_copy = std::make_shared<std::vector<uint8_t>>(0);  // Empty packet as placeholder
 
@@ -365,8 +438,8 @@ void UDPNetwork::handleSendComplete(
             });
         }
         else {
-            std::cerr << "[Network] Send error: " << error.message() 
-                      << " with error code: " << error.value() << std::endl;
+            SYSTEM_LOG_ERROR("[Network] Send error: {}, with error code: {}", error.message(), error.value());
+            NETWORK_LOG_ERROR("[Network] Send error: {}, with error code: {}", error.message(), error.value());
             
             // Only disconnect on fatal errors, not temporary ones
             if (error != boost::asio::error::operation_aborted) {
@@ -395,35 +468,44 @@ std::string UDPNetwork::getLocalAddress() const {
 }
 
 void UDPNetwork::startAsyncReceive() {
-    if (!socket_) return;
+    if (!socket_) {
+        NETWORK_LOG_ERROR("[Network] startAsyncReceive: socket is null!");
+        return;
+    }
     
-    // Reuse the same buffer
-    if (!receiveBuffer_)
-        receiveBuffer_ = std::make_shared<std::vector<uint8_t>>(MAX_PACKET_SIZE);
-    senderEndpoint_ = std::make_shared<boost::asio::ip::udp::endpoint>();
+    if (!socket_->is_open()) {
+        NETWORK_LOG_ERROR("[Network] startAsyncReceive: socket is not open!");
+        return;
+    }
+    
+    // Create NEW buffer for each receive operation to avoid race conditions
+    auto receiveBuffer = std::make_shared<std::vector<uint8_t>>(MAX_PACKET_SIZE);
+    auto senderEndpoint = std::make_shared<boost::asio::ip::udp::endpoint>();
     
     socket_->async_receive_from(
-        boost::asio::buffer(*receiveBuffer_), *senderEndpoint_,
-        [this](const boost::system::error_code& error, std::size_t bytes_transferred) {
-            this->handleReceiveFrom(error, bytes_transferred);
+        boost::asio::buffer(*receiveBuffer), *senderEndpoint,
+        [this, receiveBuffer, senderEndpoint](const boost::system::error_code& error, std::size_t bytes_transferred) {
+            this->handleReceiveFrom(error, bytes_transferred, receiveBuffer, senderEndpoint);
         }
     );
 }
 
-void UDPNetwork::handleReceiveFrom(const boost::system::error_code& error, std::size_t bytes_transferred) {
-    if (!running_) return;
+void UDPNetwork::handleReceiveFrom(const boost::system::error_code& error, std::size_t bytes_transferred, std::shared_ptr<std::vector<uint8_t>> receiveBuffer, std::shared_ptr<boost::asio::ip::udp::endpoint> senderEndpoint) {
+    if (!running_) {
+        NETWORK_LOG_ERROR("[Network] Received data from peer, but network not running");
+        return;
+    }
     
     if (!error) {
         // Process the received data
-        processReceivedData(bytes_transferred);
+        processReceivedData(bytes_transferred, receiveBuffer, senderEndpoint);
         
         // Queue up another receive operation immediately
         startAsyncReceive();
     }
     else if (error != boost::asio::error::operation_aborted) {
         // Handle error but don't terminate unless it's fatal
-        std::cerr << "[Network] Receive error: " << error.message()
-                  << " with error code: " << error.value() << std::endl;
+        NETWORK_LOG_ERROR("[Network] Receive error: {}, with error code: {}", error.message(), error.value());
         
         // For recoverable errors, try again after short delay
         if (error == boost::asio::error::would_block || 
@@ -437,14 +519,14 @@ void UDPNetwork::handleReceiveFrom(const boost::system::error_code& error, std::
     }
 }
 
-void UDPNetwork::processReceivedData(std::size_t bytes_transferred) {
+void UDPNetwork::processReceivedData(std::size_t bytes_transferred, std::shared_ptr<std::vector<uint8_t>> receiveBuffer, std::shared_ptr<boost::asio::ip::udp::endpoint> senderEndpoint) {
     // Skip if we don't have enough data for header
     if (bytes_transferred < 16) {
-        std::cerr << "[Network] Received packet too small: " << bytes_transferred << " bytes" << std::endl;
+        NETWORK_LOG_ERROR("[Network] Received packet too small: {} bytes", bytes_transferred);
         return;
     }
     
-    const std::vector<uint8_t>& buffer = *receiveBuffer_;
+    const std::vector<uint8_t>& buffer = *receiveBuffer;
     
     // Validate magic number
     uint32_t magic = (buffer[0] << 24) | (buffer[1] << 16) | (buffer[2] << 8) | buffer[3];
@@ -456,7 +538,7 @@ void UDPNetwork::processReceivedData(std::size_t bytes_transferred) {
     // Validate protocol version
     uint16_t version = (buffer[4] << 8) | buffer[5];
     if (version != PROTOCOL_VERSION) {
-        std::cerr << "[Network] Unsupported protocol version: " << version << std::endl;
+        NETWORK_LOG_ERROR("[Network] Unsupported protocol version: {}", version);
         return;
     }
     
@@ -467,29 +549,33 @@ void UDPNetwork::processReceivedData(std::size_t bytes_transferred) {
     uint32_t seq = (buffer[8] << 24) | (buffer[9] << 16) | (buffer[10] << 8) | buffer[11];
     
     // Update peer activity time
-    peer_info_->updateActivity();
+    peer_connection_.updateActivity();
     
     // Store peer endpoint if not already connected
-    if (!peer_info_->isConnected()) {
-        peer_endpoint_ = *senderEndpoint_;
-        peer_info_->setConnected(true);
-        state_manager_->setState(SystemState::CONNECTED);
+    if (!peer_connection_.isConnected() && packetType != PacketType::DISCONNECT) {
+        NETWORK_LOG_INFO("[Network] First valid packet received from peer, establishing connection");
+        peer_endpoint_ = *senderEndpoint;
+        current_peer_endpoint_ = senderEndpoint->address().to_string() + ":" + std::to_string(senderEndpoint->port());
+        peer_connection_.setConnected(true);
+        
+        // Notify peer connected event
+        notifyConnectionEvent(NetworkEvent::PEER_CONNECTED, current_peer_endpoint_);
     }
     
     // Process packet based on type
     switch (packetType) {
         case PacketType::HOLE_PUNCH:
-            // Update activity time, which was done above
+            NETWORK_LOG_INFO("[Network] Received hole-punch packet from peer");
+            // Activity time was already updated above
             break;
             
         case PacketType::HEARTBEAT:
-            // Done by keep-alive thread
+            NETWORK_LOG_INFO("[Network] Received heartbeat packet from peer");
+            // Activity time was already updated above
             break;
             
         case PacketType::DISCONNECT:
             // Peer wants to disconnect
-
-            // TODO: CHECK TOMORROW
             SYSTEM_LOG_INFO("[Network] Received disconnect notification from peer");
             NETWORK_LOG_INFO("[Network] Received disconnect notification from peer");
             handleDisconnect();
@@ -529,7 +615,7 @@ void UDPNetwork::processReceivedData(std::size_t bytes_transferred) {
             
             // Send ACK
             socket_->async_send_to(
-                boost::asio::buffer(*ack), *senderEndpoint_,
+                boost::asio::buffer(*ack), *senderEndpoint,
                 [this, ack](const boost::system::error_code& error, std::size_t sent) {
                     if (error && error != boost::asio::error::operation_aborted) {
                         std::cerr << "[Network] Error sending ACK: " << error.message() 
@@ -543,8 +629,8 @@ void UDPNetwork::processReceivedData(std::size_t bytes_transferred) {
             std::memcpy(tunPacket.data(), buffer.data() + 16, msgLen);
             
             // Process message on the IO thread to avoid potential deadlocks
-            auto sender_copy = *senderEndpoint_;
-            boost::asio::post([this, tunPacket, sender_copy]() {
+            auto sender_copy = *senderEndpoint;
+            boost::asio::post(io_context_, [this, tunPacket, sender_copy]() {
                 this->processMessage(std::move(tunPacket), sender_copy);
             });
             break;
@@ -564,8 +650,10 @@ void UDPNetwork::processReceivedData(std::size_t bytes_transferred) {
 }
 
 void UDPNetwork::handleDisconnect() {
-    if (!peer_info_->isConnected()) return;
+    if (!peer_connection_.isConnected()) return;
     
-    peer_info_->setConnected(false);
-    // state_manager_->setState(SystemState::IDLE);
+    peer_connection_.setConnected(false);
+    
+    // Notify ALL_PEERS_DISCONNECTED for single peer setup
+    notifyConnectionEvent(NetworkEvent::ALL_PEERS_DISCONNECTED);
 }

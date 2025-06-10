@@ -4,7 +4,7 @@ project(P2PNet)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-find_package(Boost REQUIRED COMPONENTS system filesystem thread)
+find_package(Boost REQUIRED COMPONENTS system filesystem thread stacktrace_windbg)
 
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(LIBSODIUM REQUIRED libsodium)
@@ -58,6 +58,8 @@ target_include_directories(P2PNet PRIVATE
 # Link libraries
 target_link_libraries(P2PNet PRIVATE
     ${Boost_LIBRARIES}
+    Boost::stacktrace_windbg
+    dbghelp
     ${LIBSODIUM_LIBRARIES}
     ${IXWS_LIBRARY}
     ${OPENSSL_LIBRARIES}

@@ -48,6 +48,8 @@ public:
     
     // Connection monitoring
     void monitorLoop();
+    void handleNetworkEvent(const NetworkEventData& event);
+    void performBasicHealthCheck();
     
 private:
     // Network discovery
@@ -85,7 +87,6 @@ private:
     
     // State management
     std::shared_ptr<SystemStateManager> state_manager_;
-    std::shared_ptr<PeerConnectionInfo> peer_connection_;
     std::thread monitor_thread_;
     
     // Components
