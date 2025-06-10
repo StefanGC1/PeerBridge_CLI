@@ -11,6 +11,7 @@
 #include <unordered_map>
 #include <boost/asio.hpp>
 #include <boost/asio/executor_work_guard.hpp>
+#include <boost/asio/steady_timer.hpp>
 #include "systemstatemanager.hpp"
 
 class UDPNetwork {
@@ -67,6 +68,11 @@ private:
     // Connection management
     void checkAllConnections();
     void notifyConnectionEvent(NetworkEvent event, const std::string& endpoint = "");
+
+    // Keep-alive functionality
+    void startKeepAliveTimer();
+    void stopKeepAliveTimer();
+    void handleKeepAlive(const boost::system::error_code&);
     
     // Constants
     static constexpr size_t MAX_PACKET_SIZE = 65507; // Max UDP packet size
@@ -85,19 +91,16 @@ private:
     std::atomic<bool> running_;
     int local_port_;
     std::string local_address_;
-    
-    boost::asio::io_context& io_context_;
-    std::optional<boost::asio::executor_work_guard<
-        boost::asio::io_context::executor_type>> workGuard;
 
+    // ASIO and IO context objects
     std::unique_ptr<boost::asio::ip::udp::socket> socket_;
-    boost::asio::ip::udp::endpoint peer_endpoint_;
-    
-    // Async operation state
+
+    // std::optional<boost::asio::executor_work_guard<
+    //     boost::asio::io_context::executor_type>> workGuard;
+    boost::asio::io_context& io_context_;
     std::thread io_thread_;
 
-    std::thread keepalive_thread_;
-    std::mutex send_mutex_;
+    boost::asio::steady_timer keepAliveTimer;
     
     // Connection state tracking
     std::atomic<uint32_t> next_sequence_number_;
@@ -105,6 +108,7 @@ private:
     std::mutex pending_acks_mutex_;
     
     // Peer connection management
+    boost::asio::ip::udp::endpoint peer_endpoint_;
     PeerConnectionInfo peer_connection_;  // Changed from shared_ptr to concrete object
     std::string current_peer_endpoint_;   // For event identification
     

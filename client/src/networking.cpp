@@ -10,9 +10,13 @@ UDPNetwork::UDPNetwork(
     std::unique_ptr<boost::asio::ip::udp::socket> socket,
     boost::asio::io_context& context,
     std::shared_ptr<SystemStateManager> state_manager) 
-    : running_(false), local_port_(0), next_sequence_number_(0)
-    , socket_(std::move(socket)), io_context_(context)
+    : running_(false)
+    , local_port_(0)
+    , next_sequence_number_(0)
+    , socket_(std::move(socket))
+    , io_context_(context)
     , state_manager_(state_manager)
+    , keepAliveTimer(io_context_)
 {
 }
 
@@ -32,9 +36,9 @@ bool UDPNetwork::startListening(int port) {
         local_address_ = local_endpoint.address().to_string();
         local_port_ = local_endpoint.port();
         
-        // Increase socket buffer sizes
-        boost::asio::socket_base::send_buffer_size sendBufferOption(2 * 1024 * 1024); // 2MB
-        boost::asio::socket_base::receive_buffer_size recvBufferOption(2 * 1024 * 1024); // 2MB
+        // Increase socket buffer sizes for high-throughput scenarios
+        boost::asio::socket_base::send_buffer_size sendBufferOption(4 * 1024 * 1024); // 4MB
+        boost::asio::socket_base::receive_buffer_size recvBufferOption(4 * 1024 * 1024); // 4MB
         socket_->set_option(sendBufferOption);
         socket_->set_option(recvBufferOption);
         
@@ -43,8 +47,8 @@ bool UDPNetwork::startListening(int port) {
 
         // TODO: REMOVE WORK GUARD FUNCTIONALITY IN CASE CONNECTIO PROBLEMS STILL ARISE
         NETWORK_LOG_INFO("[Network] Creating work guard");
-        if (!workGuard)
-            workGuard.emplace(boost::asio::make_work_guard(io_context_));
+        // if (!workGuard)
+        //     workGuard.emplace(boost::asio::make_work_guard(io_context_));
         NETWORK_LOG_INFO("[Network] Work guard created successfully");
         
         // Start async receiving
@@ -68,6 +72,7 @@ bool UDPNetwork::startListening(int port) {
                     std::cerr << "[Network] IO thread error: " << e.what() << std::endl;
                     NETWORK_LOG_ERROR("[Network] IO thread error: {}", e.what());
                 }
+            NETWORK_LOG_WARNING("[Network] IO thread finished running, shutting down");
             });
         }
         
@@ -93,12 +98,12 @@ bool UDPNetwork::connectToPeer(const std::string& ip, int port)
         peer_endpoint_ = boost::asio::ip::udp::endpoint(addr, port);
         current_peer_endpoint_ = ip + ":" + std::to_string(port);
 
-        if (!workGuard)
-        {
-            NETWORK_LOG_INFO("[Network] Work guard not initialized, creating work guard");
-            workGuard.emplace(boost::asio::make_work_guard(io_context_));
-            NETWORK_LOG_INFO("[Network] Work guard created successfully");
-        }
+        // if (!workGuard)
+        // {
+        //     NETWORK_LOG_INFO("[Network] Work guard not initialized, creating work guard");
+        //     workGuard.emplace(boost::asio::make_work_guard(io_context_));
+        //     NETWORK_LOG_INFO("[Network] Work guard created successfully");
+        // }
 
         NETWORK_LOG_INFO("[Network] Starting UDP hole punching to {}:{}", ip, port);
         running_ = true;
@@ -127,23 +132,7 @@ void UDPNetwork::startHolePunchingProcess(const boost::asio::ip::udp::endpoint& 
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
     
-    // Start keepalive thread
-    keepalive_thread_ = std::thread([this]() {
-        while (running_) {  // Only check running_ flag
-            // Send hole punch packet
-            NETWORK_LOG_INFO("[Network] Sending keep-alive packet to peer: {}", peer_endpoint_.address().to_string());
-            this->sendHolePunchPacket();
-            
-            // Check connection status only if we're supposed to be connected
-            if (peer_connection_.isConnected()) {
-                this->checkAllConnections();
-            }
-            
-            // Sleep for a short period
-            std::this_thread::sleep_for(std::chrono::seconds(3));
-        }
-        NETWORK_LOG_INFO("[Network] Keep-alive thread exiting");
-    });
+    startKeepAliveTimer();
 }
 
 void UDPNetwork::sendHolePunchPacket() {
@@ -224,22 +213,15 @@ void UDPNetwork::stopConnection() {
     // Send disconnect notification to peer
     sendDisconnectNotification();
 
-    // Update state first to stop keep-alive thread gracefully
     peer_connection_.setConnected(false);
-
     running_ = false;
 
-    if (keepalive_thread_.joinable()) {
-        keepalive_thread_.join();
-    } else {
-        NETWORK_LOG_ERROR("[Network] Keep-alive thread not joinable");
-    }
-
-    if (workGuard) {
-        workGuard->reset();
-    } else {
-        NETWORK_LOG_ERROR("[Network] Work guard not initialized");
-    }
+    stopKeepAliveTimer();
+    // if (workGuard) {
+    //     workGuard->reset();
+    // } else {
+    //     NETWORK_LOG_ERROR("[Network] Work guard not initialized");
+    // }
     
     state_manager_->setState(SystemState::IDLE);
     
@@ -247,7 +229,6 @@ void UDPNetwork::stopConnection() {
     NETWORK_LOG_INFO("[Network] Stopped connection to peer");
 }
 
-// New implementation: Full network subsystem shutdown
 void UDPNetwork::shutdown() {
     // First stop any active connection
     if (peer_connection_.isConnected()) {
@@ -256,37 +237,30 @@ void UDPNetwork::shutdown() {
     
     // Then shut down the network stack
     running_ = false;
+    peer_connection_.setConnected(false);
     state_manager_->setState(SystemState::SHUTTING_DOWN);
 
-    // Wait for keep-alive thread to finish if it's still running
-    if (keepalive_thread_.joinable()) {
-        keepalive_thread_.join();
-    }
+    stopKeepAliveTimer();
+    // if (workGuard) {
+    //     workGuard->reset();
+    // }
 
-    if (workGuard) {
-        workGuard->reset();
-    }
-
-    if (socket_) {
-        try {
-            // Cancel any pending async operations
-            boost::system::error_code ec;
-            socket_->cancel(ec);
-            socket_->close(ec);
-        } catch (...) {}
+    if (socket_)
+    {
+        boost::system::error_code ec;
+        socket_->cancel(ec);
+        socket_->close(ec);
     }
     
     // Stop io_context 
     io_context_.stop();
 
-    if (io_thread_.joinable()) {
+    if (io_thread_.joinable())
         io_thread_.join();
-    }
     
     SYSTEM_LOG_INFO("[Network] Network subsystem shut down");
 }
 
-// New implementation: Send a disconnect notification packet to peer
 void UDPNetwork::sendDisconnectNotification() {
     try {
         if (!peer_connection_.isConnected() || !socket_) {
@@ -491,29 +465,58 @@ void UDPNetwork::startAsyncReceive() {
 }
 
 void UDPNetwork::handleReceiveFrom(const boost::system::error_code& error, std::size_t bytes_transferred, std::shared_ptr<std::vector<uint8_t>> receiveBuffer, std::shared_ptr<boost::asio::ip::udp::endpoint> senderEndpoint) {
-    if (!running_) {
-        NETWORK_LOG_ERROR("[Network] Received data from peer, but network not running");
-        return;
-    }
+    // if (!running_) {
+    //     NETWORK_LOG_ERROR("[Network] Received data from peer, but network not running");
+    //     startAsyncReceive(); // "Consume" packet and queue up another startAsyncReceive
+    //     return;
+    // }
     
-    if (!error) {
-        // Process the received data
-        processReceivedData(bytes_transferred, receiveBuffer, senderEndpoint);
+    // if (!error) {
+    //     // Process the received data
+    //     processReceivedData(bytes_transferred, receiveBuffer, senderEndpoint);
         
-        // Queue up another receive operation immediately
-        startAsyncReceive();
+    //     // Queue up another receive operation immediately
+    //     startAsyncReceive();
+    // }
+    // else if (error != boost::asio::error::operation_aborted) {
+    //     // Handle error but don't terminate unless it's fatal
+    //     NETWORK_LOG_ERROR("[Network] Receive error: {}, with error code: {}", error.message(), error.value());
+        
+    //     // For recoverable errors, try again after short delay
+    //     if (error == boost::asio::error::would_block || 
+    //         error == boost::asio::error::try_again) {
+    //         boost::asio::post(io_context_, [this]() { startAsyncReceive(); });
+    //     }
+    //     else {
+    //         // For fatal errors, handle disconnect
+    //         handleDisconnect();
+    //     }
+    // }
+    // UNCOMMENT IN CASE THIS BREAKS!
+    if (socket_ && socket_->is_open() && error != boost::asio::error::operation_aborted)
+    {
+        startAsyncReceive(); // Continuously queue up another startAsyncReceive
     }
-    else if (error != boost::asio::error::operation_aborted) {
+
+    if (!error)
+    {
+        processReceivedData(bytes_transferred, receiveBuffer, senderEndpoint);
+    }
+    else if (error != boost::asio::error::operation_aborted)
+    {
         // Handle error but don't terminate unless it's fatal
-        NETWORK_LOG_ERROR("[Network] Receive error: {}, with error code: {}", error.message(), error.value());
+        NETWORK_LOG_ERROR("[Network] Receive error: {} (code: {})", error.message(), error.value());
         
-        // For recoverable errors, try again after short delay
         if (error == boost::asio::error::would_block || 
-            error == boost::asio::error::try_again) {
-            boost::asio::post(io_context_, [this]() { startAsyncReceive(); });
+            error == boost::asio::error::try_again)
+        {
+            // Recoverable errors
+            NETWORK_LOG_WARNING("[Network] Recoverable receive error: {} (code: {}), continuing", error.message(), error.value());
         }
-        else {
-            // For fatal errors, handle disconnect
+        else
+        {
+            // Fatal errors
+            NETWORK_LOG_ERROR("[Network] Fatal receive error: {} (code: {}), disconnecting", error.message(), error.value());
             handleDisconnect();
         }
     }
@@ -531,7 +534,7 @@ void UDPNetwork::processReceivedData(std::size_t bytes_transferred, std::shared_
     // Validate magic number
     uint32_t magic = (buffer[0] << 24) | (buffer[1] << 16) | (buffer[2] << 8) | buffer[3];
     if (magic != MAGIC_NUMBER) {
-        // Silent ignore, probably not our protocol
+        NETWORK_LOG_WARNING("[Network] Received packet with invalid magic number: {}", magic);
         return;
     }
     
@@ -550,20 +553,33 @@ void UDPNetwork::processReceivedData(std::size_t bytes_transferred, std::shared_
     
     // Update peer activity time
     peer_connection_.updateActivity();
-    
-    // Store peer endpoint if not already connected
-    if (!peer_connection_.isConnected() && packetType != PacketType::DISCONNECT) {
-        NETWORK_LOG_INFO("[Network] First valid packet received from peer, establishing connection");
-        peer_endpoint_ = *senderEndpoint;
-        current_peer_endpoint_ = senderEndpoint->address().to_string() + ":" + std::to_string(senderEndpoint->port());
-        peer_connection_.setConnected(true);
-        
-        // Notify peer connected event
-        notifyConnectionEvent(NetworkEvent::PEER_CONNECTED, current_peer_endpoint_);
+
+    if (packetType != PacketType::DISCONNECT)
+    {
+        // Consume packet if network not running
+        if (!running_)
+        {
+            NETWORK_LOG_ERROR("[Network] Received packet, but network not running");
+            return;
+        }
+
+        // Store peer endpoint if not already connected
+        if (!peer_connection_.isConnected())
+        {
+            NETWORK_LOG_INFO("[Network] First valid packet received from peer, establishing connection");
+            peer_endpoint_ = *senderEndpoint;
+            current_peer_endpoint_ = senderEndpoint->address().to_string() + ":" + std::to_string(senderEndpoint->port());
+            peer_connection_.setConnected(true);
+            
+            // Notify peer connected event
+            notifyConnectionEvent(NetworkEvent::PEER_CONNECTED, current_peer_endpoint_);
+        }
     }
+
     
     // Process packet based on type
     switch (packetType) {
+        
         case PacketType::HOLE_PUNCH:
             NETWORK_LOG_INFO("[Network] Received hole-punch packet from peer");
             // Activity time was already updated above
@@ -628,11 +644,12 @@ void UDPNetwork::processReceivedData(std::size_t bytes_transferred, std::shared_
             std::vector<uint8_t> tunPacket(msgLen);
             std::memcpy(tunPacket.data(), buffer.data() + 16, msgLen);
             
-            // Process message on the IO thread to avoid potential deadlocks
+            // Process message, send to wintun interface
             auto sender_copy = *senderEndpoint;
-            boost::asio::post(io_context_, [this, tunPacket, sender_copy]() {
-                this->processMessage(std::move(tunPacket), sender_copy);
-            });
+            // boost::asio::post(io_context_, [this, tunPacket, sender_copy]() {
+            //     this->processMessage(std::move(tunPacket), sender_copy);
+            // }); // UNCOMMENT IN CASE THIS BREAKS!
+            this->processMessage(std::move(tunPacket), sender_copy);
             break;
         }
         
@@ -656,4 +673,42 @@ void UDPNetwork::handleDisconnect() {
     
     // Notify ALL_PEERS_DISCONNECTED for single peer setup
     notifyConnectionEvent(NetworkEvent::ALL_PEERS_DISCONNECTED);
+}
+
+void UDPNetwork::startKeepAliveTimer() {
+    if (!running_) return;
+
+    keepAliveTimer.expires_after(std::chrono::seconds(3));
+    keepAliveTimer.async_wait([this](const boost::system::error_code& error) {
+        handleKeepAlive(error);
+    });
+}
+
+void UDPNetwork::stopKeepAliveTimer() {
+    try {
+        NETWORK_LOG_INFO("[Network] Stopping keep-alive timer");
+        keepAliveTimer.cancel();
+    } catch (const boost::system::system_error& e) {
+        NETWORK_LOG_ERROR("[Network] Error cancelling keep-alive timer: {}", e.what());
+    }
+}
+
+void UDPNetwork::handleKeepAlive(const boost::system::error_code& error) {
+    if (error == boost::asio::error::operation_aborted) {
+        NETWORK_LOG_INFO("[Network] Keep-alive timer cancelled");
+        return;
+    }
+
+    if (!running_) {
+        NETWORK_LOG_INFO("[Network] Network not running, skipping keep-alive");
+        return;
+    }
+
+    NETWORK_LOG_INFO("[Network] Running keep-alive functionality");
+    sendHolePunchPacket(); // Send hole punch packet
+    if (peer_connection_.isConnected()) {
+        checkAllConnections(); // Check connection status
+    }
+
+    startKeepAliveTimer(); // Restart timer
 }

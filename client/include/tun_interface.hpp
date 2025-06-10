@@ -77,6 +77,7 @@ private:
     typedef void (*WintunEndSessionFunc)(WINTUN_SESSION_HANDLE);
     typedef void (*WintunCloseAdapterFunc)(WINTUN_ADAPTER_HANDLE);
     typedef BOOL (*WintunGetAdapterLUIDFunc)(WINTUN_ADAPTER_HANDLE, NET_LUID*);
+    typedef HANDLE (*WintunGetReadWaitEventFunc)(WINTUN_SESSION_HANDLE);
     typedef BOOL (*WintunDeleteDriverFunc)(void);
     
     // Wintun function pointers
@@ -90,6 +91,7 @@ private:
     WintunEndSessionFunc pWintunEndSession = nullptr;
     WintunCloseAdapterFunc pWintunCloseAdapter = nullptr;
     WintunGetAdapterLUIDFunc pWintunGetAdapterLUID = nullptr;
+    WintunGetReadWaitEventFunc pWintunGetReadWaitEvent = nullptr;
     WintunDeleteDriverFunc pWintunDeleteDriver = nullptr;
 
     // State management

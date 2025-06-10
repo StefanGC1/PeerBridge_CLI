@@ -38,6 +38,8 @@ bool TunInterface::loadWintunFunctions(HMODULE wintunModule) {
         reinterpret_cast<WintunCloseAdapterFunc>(GetProcAddress(wintunModule, "WintunCloseAdapter"));
     pWintunGetAdapterLUID =
         reinterpret_cast<WintunGetAdapterLUIDFunc>(GetProcAddress(wintunModule, "WintunGetAdapterLUID"));
+    pWintunGetReadWaitEvent =
+        reinterpret_cast<WintunGetReadWaitEventFunc>(GetProcAddress(wintunModule, "WintunGetReadWaitEvent"));
     // TODO: GET WintunDeleteAdapter
     pWintunDeleteDriver = 
         reinterpret_cast<WintunDeleteDriverFunc>(GetProcAddress(wintunModule, "WintunDeleteDriver"));
@@ -45,7 +47,7 @@ bool TunInterface::loadWintunFunctions(HMODULE wintunModule) {
     return pWintunOpenAdapter && pWintunCreateAdapter && 
            pWintunStartSession && pWintunAllocateSendPacket && pWintunSendPacket && 
            pWintunReceivePacket && pWintunReleaseReceivePacket && pWintunEndSession && 
-           pWintunCloseAdapter && pWintunGetAdapterLUID;
+           pWintunCloseAdapter && pWintunGetAdapterLUID && pWintunGetReadWaitEvent;
 }
 
 bool TunInterface::initialize(const std::string& deviceName) {
@@ -145,13 +147,19 @@ void TunInterface::stopPacketProcessing() {
 }
 
 void TunInterface::receiveThreadFunc() {
+    // Get Wintun's read-wait event handle
+    HANDLE readWaitEvent = pWintunGetReadWaitEvent(session);
+    if (!readWaitEvent) {
+        std::cerr << "Failed to get Wintun read wait event" << std::endl;
+        return;
+    }
+    
     while (running_) {
         DWORD packetSize;
         WINTUN_PACKET* packet = pWintunReceivePacket(session, &packetSize);
         
         if (packet) {
-            // Copy packet data - in WireGuard's Wintun, the packet pointer is the data
-            // Use explicit cast to uint8_t* and construct the vector properly
+            // Copy packet data - in Wintun, the packet pointer is the data
             const uint8_t* packetDataPtr = reinterpret_cast<const uint8_t*>(packet);
             std::vector<uint8_t> packetData(packetDataPtr, packetDataPtr + packetSize);
             
@@ -162,10 +170,24 @@ void TunInterface::receiveThreadFunc() {
             if (packetCallback_) {
                 packetCallback_(packetData);
             }
-        } else {
-            // No packet available, sleep for a bit
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+
+            continue;
         }
+        
+        // Wait for signal from wintun or timeout
+        DWORD waitResult = WaitForSingleObject(readWaitEvent, 5); // 5ms timeout for gaming responsiveness
+        
+        if (waitResult == WAIT_TIMEOUT) {
+            // Timeout is normal, just continue the loop
+            continue;
+        } else if (waitResult != WAIT_OBJECT_0) {
+            // Error occurred
+            if (running_) {
+                NETWORK_LOG_ERROR("[TunInterface] WaitForSingleObject failed: {}", GetLastError());
+            }
+            break;
+        }
+        // Event was signaled, loop back to try receiving packets
     }
 }
 
@@ -173,11 +195,11 @@ void TunInterface::sendThreadFunc() {
     while (running_) {
         std::vector<uint8_t> packetData;
         
-        // Wait for packet or timeout
+        // Wait for packet or timeout - increased timeout for better efficiency
         {
             std::unique_lock<std::mutex> lock(packetQueueMutex_);
             
-            if (packetCondition_.wait_for(lock, std::chrono::microseconds(100), 
+            if (packetCondition_.wait_for(lock, std::chrono::milliseconds(1), 
                 [this] { return !outgoingPackets_.empty() || !running_; })) 
             {
                 // Got signaled - packet available or shutting down
