@@ -137,6 +137,9 @@ void TunInterface::stopPacketProcessing() {
     if (sendThread_.joinable()) {
         sendThread_.join();
     }
+
+    // TODO: clear packet queue
+    outgoingPackets_ = {};
     
     clog << "Packet processing stopped" << std::endl;
 }

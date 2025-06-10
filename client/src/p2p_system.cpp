@@ -58,15 +58,19 @@ struct IPPacket {
 P2PSystem::P2PSystem() 
     : running_(false), public_port_(0), peer_port_(0), is_host_(false)
 {
+    // Initialize state managers
+    state_manager_ = std::make_shared<SystemStateManager>();
+    peer_connection_ = std::make_shared<PeerConnectionInfo>();
 }
 
 P2PSystem::~P2PSystem() {
-    disconnect();
+    shutdown();
 }
 
 bool P2PSystem::initialize(const std::string& server_url, const std::string& username, int local_port) {
     username_ = username;
     running_ = true;
+    state_manager_->setState(SystemState::IDLE);
 
     /*
     *   STUN PROCEDURE SETUP
@@ -135,7 +139,9 @@ bool P2PSystem::initialize(const std::string& server_url, const std::string& use
     // Create networking class, using the socket from STUN to preserve NAT binding
     network_ = std::make_unique<UDPNetwork>(
         std::move(stun_.getSocket()),
-        stun_.getContext());
+        stun_.getContext(),
+        state_manager_,
+        peer_connection_);
     
     // Set up network callbacks for P2P connection
     network_->setMessageCallback([this](std::vector<uint8_t> packet) {
@@ -143,19 +149,35 @@ bool P2PSystem::initialize(const std::string& server_url, const std::string& use
         this->handleNetworkData(std::move(packet));
     });
     
-    network_->setConnectionCallback([this](bool connected) {
-        this->handleConnectionChange(connected);
-    });
-    
     // Start UDP network
     if (!network_->startListening(local_port)) {
         SYSTEM_LOG_ERROR("[System] Failed to start UDP network");
         return false;
     }
+    
+    // Start monitoring loop
+    monitor_thread_ = std::thread([this]() {
+        while (running_ && !state_manager_->isInState(SystemState::SHUTTING_DOWN)) {
+            this->monitorLoop();
+            std::this_thread::sleep_for(std::chrono::seconds(3));
+        }
+    });
+    monitor_thread_.detach();
 
     SYSTEM_LOG_INFO("[System] P2P System initialized successfully");
     
     return true;
+}
+
+void P2PSystem::monitorLoop() {
+    // Check connection state
+    if (state_manager_->isInState(SystemState::CONNECTED) && !peer_connection_->isConnected()) {
+        // Connection lost, update system state
+        SYSTEM_LOG_WARNING("[System] Connection lost detected by monitor loop");
+        stopConnection();
+    }
+    
+    // Removed problematic TUN interface check that was causing unnecessary network reconfigurations
 }
 
 bool P2PSystem::discoverPublicAddress() {
@@ -172,15 +194,17 @@ bool P2PSystem::discoverPublicAddress() {
     return true;
 }
 
-// !! SCHEDULED FOR REMOVAL WHEN INTEGRATING
 bool P2PSystem::connectToPeer(const std::string& peer_username) {
-    if (network_->isConnected()) {
+    if (peer_connection_->isConnected()) {
         SYSTEM_LOG_WARNING("[System] Attempted to connect to peer while already connected to a peer");
         return false;
     }
     
     peer_username_ = peer_username;
     is_host_ = false;
+    
+    // Update system state
+    state_manager_->setState(SystemState::CONNECTING);
     
     // Request peer info from signaling server
     signaling_.requestPeerInfo(peer_username);
@@ -193,31 +217,65 @@ bool P2PSystem::connectToPeer(const std::string& peer_username) {
     return true;
 }
 
-void P2PSystem::disconnect() {
+// Stop current connection but keep system running
+void P2PSystem::stopConnection() {
+    // Stop the network connection
+    if (network_) {
+        network_->stopConnection();
+    }
+    
+    // Stop the network interface
+    stopNetworkInterface();
+    
+    // Reset peer info
+    peer_username_ = "";
+    peer_ip_ = "";
+    peer_port_ = 0;
+    
+    // Update system state
+    state_manager_->setState(SystemState::IDLE);
+    
+    SYSTEM_LOG_INFO("[System] Connection stopped, system ready for new connections");
+}
+
+// Full system shutdown
+void P2PSystem::shutdown() {
+    // First stop any active connections
+    if (peer_connection_->isConnected()) {
+        stopConnection();
+    }
+    
+    // Update system state
+    state_manager_->setState(SystemState::SHUTTING_DOWN);
     running_ = false;
+    
+    // Stop the network interface
+    stopNetworkInterface();
+    tun_->close();
+    
+    // Stop the network
+    if (network_) {
+        network_->shutdown();
+    }
     
     // Stop packet handling
     if (packet_handling_thread_.joinable()) {
         packet_handling_thread_.join();
     }
     
-    // TODO: REFACTORIZE DISCONNECT / SHUTDOWN PROCESS
-    // Stop the network interface
-    stopNetworkInterface();
-    networkConfigManager.resetInterfaceConfiguration(peer_virtual_ip_);
-
-    // Disconnect from peer
-    network_->disconnect();
+    // Close the TUN interface
+    if (tun_) {
+        tun_->close();
+    }
+    
+    // Clean up signaling connection
     signaling_.disconnect();
     
-    peer_username_ = "";
-    pending_request_from_ = "";
-
-    SYSTEM_LOG_INFO("[System] Disconnected");
+    SYSTEM_LOG_INFO("[System] System shut down successfully");
 }
 
 bool P2PSystem::isConnected() const {
-    return network_->isConnected();
+    return peer_connection_->isConnected();
 }
 
 bool P2PSystem::isRunning() const {
@@ -264,13 +322,12 @@ void P2PSystem::rejectIncomingRequest() {
 }
 
 bool P2PSystem::startNetworkInterface() {
-    if (!network_->isConnected()) {
+    if (!peer_connection_->isConnected()) {
         SYSTEM_LOG_WARNING("[System] Cannot configure interface, not connected to a peer");
         return false;
     }
     
     // Assign IP addresses based on host/client role
-    // TODO: TO BE MODIFIED FOR *1, this can be removed as peer info parsing will be done elsewhere
     assignIPAddresses();
     uint8_t selfIndex = is_host_ ? 1 : 2;
     
@@ -290,20 +347,21 @@ bool P2PSystem::startNetworkInterface() {
         return false;
     }
     
-    SYSTEM_LOG_INFO("[System] Network interface started with IP ", local_virtual_ip_);
-    SYSTEM_LOG_INFO("[System] Peer has IP ", peer_virtual_ip_);
+    SYSTEM_LOG_INFO("[System] Network interface started with IP {}", local_virtual_ip_);
+    SYSTEM_LOG_INFO("[System] Peer has IP {}", peer_virtual_ip_);
 
     clog.setLoggingEnabled(false);
     
     return true;
 }
 
-void P2PSystem::stopNetworkInterface() {
-    if (tun_ && tun_->isRunning()) {
+void P2PSystem::stopNetworkInterface()
+{
+    if (tun_ && tun_->isRunning())
+    {
         tun_->stopPacketProcessing();
-        tun_->close();
-        
-        SYSTEM_LOG_INFO("[System] Network interface stopped");
+        networkConfigManager.resetInterfaceConfiguration(peer_virtual_ip_);
+        SYSTEM_LOG_INFO("[System] Network interface stopped and configuration reset");
     }
 }
 
@@ -345,23 +403,28 @@ void P2PSystem::handleConnectionInit(const std::string& username, const std::str
     if (!network_->connectToPeer(ip, port)) {
         SYSTEM_LOG_ERROR("[System] Failed to initiate UDP hole punching, will retry...");
     }
+    
+    // Set state to CONNECTED when the connection is established
+    state_manager_->setState(SystemState::CONNECTED);
+    
+    // Start the virtual network interface now that we're connected
+    if (!startNetworkInterface()) {
+        SYSTEM_LOG_WARNING("[System] Failed to start network interface, connection will be limited");
+        return;
+    }
+    
+    SYSTEM_LOG_INFO("[System] Virtual network is now active with {}. You can use standard networking tools (ping, etc.)", username);
 }
 
 void P2PSystem::handlePacketFromTun(const std::vector<uint8_t>& packet) {
     // We received a packet from our TUN interface, forward to peer
     // Minimum IPv4 header size and version check
-    if (packet.size() >= sizeof(IPPacket) && network_->isConnected() && (packet[0] >> 4) == 4) {
+    if (packet.size() >= sizeof(IPPacket) && (packet[0] >> 4) == 4) {
         forwardPacketToPeer(packet);
     }
 }
 
 bool P2PSystem::forwardPacketToPeer(const std::vector<uint8_t>& packet) {
-    // Check if the packet is an IPv4 packet
-    // UNCOMMENT IN CASE THIS BREAKS
-    // if (packet.empty() || (packet[0] >> 4) != 4) {
-    //     return false;  // Not an IPv4 packet
-    // }
-
     // Extract source and destination IPs for filtering
     uint32_t srcIp = (packet[12] << 24) | (packet[13] << 16) | (packet[14] << 8) | packet[15];
     uint32_t dstIp = (packet[16] << 24) | (packet[17] << 16) | (packet[18] << 8) | packet[19];
@@ -382,27 +445,22 @@ bool P2PSystem::forwardPacketToPeer(const std::vector<uint8_t>& packet) {
     if (isMulticast) dumpMinecraftLan(packet, "[TX] Sending");
     
     // Send the packet to the peer
-    // TODO: Improve logging
-    // NETWORK_TRAFFIC_LOG("[Network] Extracted packet from TUN, sending to peer: {} -> {} (Size: {})",
-    //                 srcIpStr, dstIpStr, packet.size());
     return network_->sendMessage(packet);
 }
 
 void P2PSystem::handleNetworkData(std::vector<uint8_t> data) {
     // We received a packet from peer, forward to TUN
     // Minimum IPv4 header size and version check
-    if (data.size() >= sizeof(IPPacket) && (data[0] >> 4) == 4)
-    {
+    if (data.size() >= sizeof(IPPacket) && (data[0] >> 4) == 4) {
         deliverPacketToTun(std::move(data));
     }
 }
 
 bool P2PSystem::deliverPacketToTun(std::vector<uint8_t> packet) {
-    // Check if the packet is an IPv4 packet
-    // UNCOMMENT IN CASE THIS BREAKS
-    // if (packet.empty() || (packet[0] >> 4) != 4) {
-    //     return false;  // Not an IPv4 packet
-    // }
+    // Basic check for TUN interface availability
+    if (!tun_ || !tun_->isRunning()) {
+        return false;
+    }
     
     // Extract source and destination IPs for filtering
     uint32_t srcIp = (packet[12] << 24) | (packet[13] << 16) | (packet[14] << 8) | packet[15];
@@ -421,34 +479,8 @@ bool P2PSystem::deliverPacketToTun(std::vector<uint8_t> packet) {
         return false;
     }
 
-    if (isMulticast) dumpMinecraftLan(packet, "[TX] Receiving");
+    if (isMulticast) dumpMinecraftLan(packet, "[RX] Receiving");
     
     // Send the packet to the TUN interface
-    // TODO: Improve logging
-    // NETWORK_TRAFFIC_LOG("[Network]  Received packet from peer, delivering to TUN: {} <- {} (Size: {})",
-    //                 dstIpStr, srcIpStr, packet.size());
     return tun_->sendPacket(std::move(packet));
-}
-
-void P2PSystem::handleConnectionChange(bool connected) {
-    if (!connected)
-    {
-        SYSTEM_LOG_INFO("[System] Disconnected from {}", peer_username_);
-
-        // TODO: REFACTORIZE DISCONNECT / SHUTDOWN PROCESS
-        // Stop the network interface
-        stopNetworkInterface();
-        
-        peer_username_ = "";
-        return;
-    }
-
-    SYSTEM_LOG_INFO("[System] Network connection inititated with {}", peer_username_);
-
-    // Start the virtual network interface now that we're connected
-    if (!startNetworkInterface()) {
-        SYSTEM_LOG_WARNING("[System] Failed to start network interface, connection will be limited");
-        return;
-    }
-    SYSTEM_LOG_INFO("[System] Virtual network is now active. You can use standard networking tools (ping, etc.)");
 }

@@ -9,28 +9,36 @@
 #include <chrono>
 #include <unordered_map>
 #include <boost/asio.hpp>
+#include "systemstatemanager.hpp"
 
 class UDPNetwork {
 public:
     using MessageCallback = std::function<void(const std::vector<uint8_t>)>;
-    using ConnectionCallback = std::function<void(bool)>;
     
     UDPNetwork(
-        std::unique_ptr<boost::asio::ip::udp::socket>,
-        boost::asio::io_context&
+        std::unique_ptr<boost::asio::ip::udp::socket> socket,
+        boost::asio::io_context& context,
+        std::shared_ptr<SystemStateManager> state_manager,
+        std::shared_ptr<PeerConnectionInfo> peer_info
     );
     ~UDPNetwork();
     
     // Setup and connection
     bool startListening(int port);
     bool connectToPeer(const std::string& ip, int port);
-    void disconnect();
+    
+    // New separated disconnect functions
+    void stopConnection();   // Just stop current peer connection
+    void shutdown();         // Full shutdown of network subsystem
+    
     bool isConnected() const;
     
     // Message handling
     bool sendMessage(const std::vector<uint8_t>& data);
     void setMessageCallback(MessageCallback callback);
-    void setConnectionCallback(ConnectionCallback callback);
+    
+    // Graceful disconnection
+    void sendDisconnectNotification();
     
     // Get local information
     int getLocalPort() const;
@@ -42,6 +50,8 @@ private:
     void handleReceiveFrom(const boost::system::error_code& error, std::size_t bytes_transferred);
     void handleSendComplete(const boost::system::error_code& error, std::size_t bytes_sent, uint32_t seq);
     void processReceivedData(std::size_t bytes_transferred);
+    
+    // Internal disconnect handler
     void handleDisconnect();
 
     // UDP hole punching: send periodic keepalive packets
@@ -62,11 +72,11 @@ private:
         HOLE_PUNCH = 0x01,
         HEARTBEAT = 0x02,
         MESSAGE = 0x03,
-        ACK = 0x04
+        ACK = 0x04,
+        DISCONNECT = 0x05  // New disconnect notification packet
     };
     
     std::atomic<bool> running_;
-    std::atomic<bool> connected_;
     int local_port_;
     std::string local_address_;
     
@@ -83,12 +93,14 @@ private:
     std::mutex send_mutex_;
     
     // Connection state tracking
-    std::chrono::time_point<std::chrono::steady_clock> last_received_time_;
     std::atomic<uint32_t> next_sequence_number_;
     std::unordered_map<uint32_t, std::chrono::time_point<std::chrono::steady_clock>> pending_acks_;
     std::mutex pending_acks_mutex_;
     
+    // New state managers
+    std::shared_ptr<SystemStateManager> state_manager_;
+    std::shared_ptr<PeerConnectionInfo> peer_info_;
+    
     // Callbacks
     MessageCallback on_message_;
-    ConnectionCallback on_connection_;
 };

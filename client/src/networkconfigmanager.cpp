@@ -276,7 +276,7 @@ bool NetworkConfigManager::removeRouting(const std::string& peerVirtualIp)
     command.str("");
     command << "netsh interface ip set address "
             << " \"" << narrowAlias << "\" "
-            << "dchp";
+            << "dhcp";
     
     if (!(success = executeNetshCommand(command.str())))
         SYSTEM_LOG_INFO("[Network Config Manager] Failed to remove self (static) routing");

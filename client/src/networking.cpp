@@ -8,19 +8,21 @@
 
 UDPNetwork::UDPNetwork(
     std::unique_ptr<boost::asio::ip::udp::socket> socket,
-    boost::asio::io_context& context) 
-    : running_(false), connected_(false), local_port_(0), next_sequence_number_(0)
+    boost::asio::io_context& context,
+    std::shared_ptr<SystemStateManager> state_manager,
+    std::shared_ptr<PeerConnectionInfo> peer_info) 
+    : running_(false), local_port_(0), next_sequence_number_(0)
     , socket_(std::move(socket)), io_context_(context)
+    , state_manager_(state_manager), peer_info_(peer_info)
 {
 }
 
 UDPNetwork::~UDPNetwork() {
-    disconnect();
+    shutdown();
 }
 
 bool UDPNetwork::startListening(int port) {
     try {
-
         // Get local endpoint information
         boost::asio::ip::udp::endpoint local_endpoint = socket_->local_endpoint();
         local_address_ = local_endpoint.address().to_string();
@@ -35,27 +37,29 @@ bool UDPNetwork::startListening(int port) {
         socket_->set_option(sendBufferOption);
         socket_->set_option(recvBufferOption);
         
-        // Start IO context in a separate thread
+        // Set running flag to true
         running_ = true;
         
         // Start async receiving
         startAsyncReceive();
         
         // Start IO thread to handle asynchronous operations
-        io_thread_ = std::thread([this]() {
-            try {
-                while (running_) {
-                    try {
-                        io_context_.run_for(std::chrono::milliseconds(100));
-                        io_context_.restart();
-                    } catch (const std::exception& e) {
-                        std::cerr << "[Network] IO context error: " << e.what() << std::endl;
+        if (!io_thread_.joinable()) {
+            io_thread_ = std::thread([this]() {
+                try {
+                    while (!state_manager_->isInState(SystemState::SHUTTING_DOWN)) {
+                        try {
+                            io_context_.run_for(std::chrono::milliseconds(100));
+                            io_context_.restart();
+                        } catch (const std::exception& e) {
+                            std::cerr << "[Network] IO context error: " << e.what() << std::endl;
+                        }
                     }
+                } catch (const std::exception& e) {
+                    std::cerr << "[Network] IO thread error: " << e.what() << std::endl;
                 }
-            } catch (const std::exception& e) {
-                std::cerr << "[Network] IO thread error: " << e.what() << std::endl;
-            }
-        });
+            });
+        }
         
         clog << "[Network] Listening on UDP " << local_address_ << ":" << local_port_ << std::endl;
         return true;
@@ -66,7 +70,7 @@ bool UDPNetwork::startListening(int port) {
 }
 
 bool UDPNetwork::connectToPeer(const std::string& ip, int port) {
-    if (connected_) {
+    if (peer_info_->isConnected()) {
         std::cout << "[Network] Already connected to a peer." << std::endl;
         return false;
     }
@@ -77,12 +81,14 @@ bool UDPNetwork::connectToPeer(const std::string& ip, int port) {
         
         std::cout << "[Network] Starting UDP hole punching to " << ip << ":" << port << "..." << std::endl;
         
+        // Update system state
+        state_manager_->setState(SystemState::CONNECTING);
+        
         // Start the hole punching process
         startHolePunchingProcess(peer_endpoint_);
         
-        // Mark as connected and start heartbeat thread
-        connected_ = true;
-        last_received_time_ = std::chrono::steady_clock::now();
+        // Mark as connected and update peer info
+        peer_info_->setConnected(true);
         
         return true;
     } catch (const std::exception& e) {
@@ -100,9 +106,9 @@ void UDPNetwork::startHolePunchingProcess(const boost::asio::ip::udp::endpoint& 
     
     // Start keepalive thread
     keepalive_thread_ = std::thread([this]() {
-        while (running_ && connected_) {
+        while (running_ && peer_info_->isConnected()) {
             // Send hole punch packet
-            if (connected_) {
+            if (peer_info_->isConnected()) {
                 this->sendHolePunchPacket();
             }
             
@@ -159,25 +165,40 @@ void UDPNetwork::sendHolePunchPacket() {
 }
 
 void UDPNetwork::checkConnectionStatus() {
-    auto now = std::chrono::steady_clock::now();
-    auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - last_received_time_).count();
-    
-    // If we haven't received anything in 10 seconds, consider the connection lost
-    if (elapsed > 10 && connected_) {
-        clog << "[Network] Connection timeout. No packets received for " << elapsed << " seconds." << std::endl;
+    if (peer_info_->hasTimedOut(10)) {
+        clog << "[Network] Connection timeout. No packets received for over 10 seconds." << std::endl;
         
-        // Mark as disconnected
-        connected_ = false;
-        
-        // Notify about connection state change
-        if (on_connection_) {
-            on_connection_(false);
-        }
+        // Handle disconnection
+        handleDisconnect();
     }
 }
 
-void UDPNetwork::disconnect() {
+// New implementation: Stop connection but keep network stack running
+void UDPNetwork::stopConnection() {
+    // Send disconnect notification to peer
+    sendDisconnectNotification();
+
+    if (keepalive_thread_.joinable()) {
+        keepalive_thread_.join();
+    }
+    
+    // Update state
+    peer_info_->setConnected(false);
+    state_manager_->setState(SystemState::IDLE);
+    
+    clog << "[Network] Stopped connection to peer" << std::endl;
+}
+
+// New implementation: Full network subsystem shutdown
+void UDPNetwork::shutdown() {
+    // First stop any active connection
+    if (peer_info_->isConnected()) {
+        stopConnection();
+    }
+    
+    // Then shut down the network stack
     running_ = false;
+    state_manager_->setState(SystemState::SHUTTING_DOWN);
     
     if (socket_) {
         try {
@@ -188,31 +209,68 @@ void UDPNetwork::disconnect() {
         } catch (...) {}
     }
     
-    if (connected_) {
-        connected_ = false;
-        
-        // Notify about disconnection
-        if (on_connection_) {
-            on_connection_(false);
-        }
-    }
-
-    
     if (io_thread_.joinable()) {
         io_thread_.join();
     }
     
     // Stop io_context 
     io_context_.stop();
+    
+    clog << "[Network] Network subsystem shut down" << std::endl;
+}
+
+// New implementation: Send a disconnect notification packet to peer
+void UDPNetwork::sendDisconnectNotification() {
+    try {
+        if (!peer_info_->isConnected() || !socket_) {
+            return; // No connection to notify
+        }
+        
+        // Create disconnect packet
+        auto packet = std::make_shared<std::vector<uint8_t>>(16);
+        
+        // Set magic number
+        (*packet)[0] = (MAGIC_NUMBER >> 24) & 0xFF;
+        (*packet)[1] = (MAGIC_NUMBER >> 16) & 0xFF;
+        (*packet)[2] = (MAGIC_NUMBER >> 8) & 0xFF;
+        (*packet)[3] = MAGIC_NUMBER & 0xFF;
+        
+        // Set protocol version
+        (*packet)[4] = (PROTOCOL_VERSION >> 8) & 0xFF;
+        (*packet)[5] = PROTOCOL_VERSION & 0xFF;
+        
+        // Set packet type to DISCONNECT
+        (*packet)[6] = static_cast<uint8_t>(PacketType::DISCONNECT);
+        
+        // Set sequence number
+        uint32_t seq = next_sequence_number_++;
+        (*packet)[8] = (seq >> 24) & 0xFF;
+        (*packet)[9] = (seq >> 16) & 0xFF;
+        (*packet)[10] = (seq >> 8) & 0xFF;
+        (*packet)[11] = seq & 0xFF;
+        
+        // Send packet - try multiple times to increase chance of delivery
+        for (int i = 0; i < 3; i++) {
+            socket_->async_send_to(
+                boost::asio::buffer(*packet), peer_endpoint_,
+                [packet](const boost::system::error_code& error, std::size_t bytes_sent) {
+                    // We don't care about errors here since we're disconnecting anyway
+                }
+            );
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "[Network] Error sending disconnect notification: " << e.what() << std::endl;
+    }
 }
 
 bool UDPNetwork::isConnected() const {
-    return connected_;
+    return peer_info_->isConnected();
 }
 
 bool UDPNetwork::sendMessage(const std::vector<uint8_t>& dataToSend) {
-    if (!connected_ || !socket_) {
-        std::cerr << "[Network] Cannot send message: not connected" << std::endl;
+    if (!running_ || !socket_) {
+        std::cerr << "[Network] Cannot send message: socket not available or system not running (disconnected)" << std::endl;
         return false;
     }
     
@@ -223,7 +281,6 @@ bool UDPNetwork::sendMessage(const std::vector<uint8_t>& dataToSend) {
             std::cerr << "[Network] Message too large, max size is " << (MAX_PACKET_SIZE - 16) << " bytes" << std::endl;
             return false;
         }
-        
         
         /*
         * SMALL CUSTOM PROTOCOL HEADER
@@ -329,10 +386,6 @@ void UDPNetwork::setMessageCallback(MessageCallback callback) {
     on_message_ = std::move(callback);
 }
 
-void UDPNetwork::setConnectionCallback(ConnectionCallback callback) {
-    on_connection_ = std::move(callback);
-}
-
 int UDPNetwork::getLocalPort() const {
     return local_port_;
 }
@@ -342,10 +395,9 @@ std::string UDPNetwork::getLocalAddress() const {
 }
 
 void UDPNetwork::startAsyncReceive() {
-    if (!running_ || !socket_) return;
+    if (!socket_) return;
     
     // Reuse the same buffer
-    // TODO: Remove if in case this causes problems
     if (!receiveBuffer_)
         receiveBuffer_ = std::make_shared<std::vector<uint8_t>>(MAX_PACKET_SIZE);
     senderEndpoint_ = std::make_shared<boost::asio::ip::udp::endpoint>();
@@ -414,30 +466,33 @@ void UDPNetwork::processReceivedData(std::size_t bytes_transferred) {
     // Get sequence number
     uint32_t seq = (buffer[8] << 24) | (buffer[9] << 16) | (buffer[10] << 8) | buffer[11];
     
-    // Update last received time
-    last_received_time_ = std::chrono::steady_clock::now();
+    // Update peer activity time
+    peer_info_->updateActivity();
     
     // Store peer endpoint if not already connected
-    if (!connected_) {
+    if (!peer_info_->isConnected()) {
         peer_endpoint_ = *senderEndpoint_;
-        connected_ = true;
-        
-        // Post callback to avoid potential deadlock with connection callbacks
-        boost::asio::post(io_context_, [this]() {
-            if (on_connection_) {
-                on_connection_(true);
-            }
-        });
+        peer_info_->setConnected(true);
+        state_manager_->setState(SystemState::CONNECTED);
     }
     
     // Process packet based on type
     switch (packetType) {
         case PacketType::HOLE_PUNCH:
-            // Update last received time, which was done above
+            // Update activity time, which was done above
             break;
             
         case PacketType::HEARTBEAT:
             // Done by keep-alive thread
+            break;
+            
+        case PacketType::DISCONNECT:
+            // Peer wants to disconnect
+
+            // TODO: CHECK TOMORROW
+            SYSTEM_LOG_INFO("[Network] Received disconnect notification from peer");
+            NETWORK_LOG_INFO("[Network] Received disconnect notification from peer");
+            handleDisconnect();
             break;
             
         case PacketType::MESSAGE: {
@@ -446,11 +501,10 @@ void UDPNetwork::processReceivedData(std::size_t bytes_transferred) {
             
             // Validate message length
             if (16 + msgLen > bytes_transferred) {
-                std::cerr << "[Network] Message length exceeds packet size" << std::endl;
+                NETWORK_LOG_ERROR("[Network] Message length exceeds packet size");
                 return;
             }
             
-            // TODO: Separate ACK system to only hole-punching and maybe to heartbeat
             // Send ACK asynchronously
             auto ack = std::make_shared<std::vector<uint8_t>>(16);
             
@@ -504,20 +558,14 @@ void UDPNetwork::processReceivedData(std::size_t bytes_transferred) {
         }
         
         default:
-            std::cerr << "[Network] Unknown packet type: " << static_cast<int>(packetType) << std::endl;
+            NETWORK_LOG_ERROR("[Network] Unknown packet type: {}", static_cast<int>(packetType));
             break;
     }
 }
 
 void UDPNetwork::handleDisconnect() {
-    if (!connected_) return;
+    if (!peer_info_->isConnected()) return;
     
-    connected_ = false;
-    
-    // Call user callback on the io_context thread to avoid deadlock
-    boost::asio::post(io_context_, [this]() {
-        if (on_connection_) {
-            on_connection_(false);
-        }
-    });
+    peer_info_->setConnected(false);
+    // state_manager_->setState(SystemState::IDLE);
 }

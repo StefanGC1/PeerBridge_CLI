@@ -4,6 +4,7 @@
 #include "networking.hpp"
 #include "tun_interface.hpp"
 #include "networkconfigmanager.hpp"
+#include "systemstatemanager.hpp"
 #include <string>
 #include <atomic>
 #include <thread>
@@ -25,7 +26,10 @@ public:
     
     // Connection management
     bool connectToPeer(const std::string& peer_username);
-    void disconnect();
+    
+    // New separated disconnect functions
+    void stopConnection();   // Stop connection but keep system running
+    void shutdown();         // Complete system shutdown
     
     // Network interface
     bool startNetworkInterface();
@@ -42,6 +46,9 @@ public:
     void acceptIncomingRequest();
     void rejectIncomingRequest();
     
+    // Connection monitoring
+    void monitorLoop();
+    
 private:
     // Network discovery
     bool discoverPublicAddress();
@@ -52,7 +59,6 @@ private:
     void handleConnectionInit(const std::string& username, const std::string& ip, int port);
     void handleNetworkData(std::vector<uint8_t> data);
     void handlePacketFromTun(const std::vector<uint8_t>& packet);
-    void handleConnectionChange(bool connected);
     
     // IP helpers
     void assignIPAddresses();
@@ -76,6 +82,11 @@ private:
     
     std::string local_virtual_ip_;
     std::string peer_virtual_ip_;
+    
+    // State management
+    std::shared_ptr<SystemStateManager> state_manager_;
+    std::shared_ptr<PeerConnectionInfo> peer_connection_;
+    std::thread monitor_thread_;
     
     // Components
     NetworkConfigManager networkConfigManager;

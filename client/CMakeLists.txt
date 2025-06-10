@@ -39,6 +39,7 @@ set(SOURCES
     src/tun_interface.cpp
     src/logger.cpp
     src/networkconfigmanager.cpp
+    src/systemstatemanager.cpp
 )
 
 # Create executable

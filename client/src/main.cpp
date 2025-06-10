@@ -55,7 +55,7 @@ void input_thread_func() {
             g_system->connectToPeer(peer);
         }
         else if (line == "/disconnect") {
-            g_system->disconnect();
+            g_system->stopConnection();
         }
         else if (line == "/accept") {
             g_system->acceptIncomingRequest();
@@ -122,8 +122,8 @@ int main(int argc, char* argv[]) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
     
-    // Cleanup
-    g_system->disconnect();
+    // Cleanup - use full shutdown at program exit
+    g_system->shutdown();
     
     // Wait for input thread to finish
     if (input_thread.joinable()) {
