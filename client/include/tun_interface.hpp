@@ -13,19 +13,13 @@
 #include <queue>
 #include <boost/asio.hpp>
 
-// IP Protocol constants
-constexpr uint8_t IP_PROTO_ICMP = 1;
-constexpr uint8_t IP_PROTO_TCP = 6;
-constexpr uint8_t IP_PROTO_UDP = 17;
-
-// Add missing declarations needed for compilation
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 using WINTUN_PACKET = BYTE*;
 
-// Corrected declarations for WireGuard's Wintun API
+// TODO: Test if removing this is ok
 BOOL WINAPI WintunGetAdapterLUID(_In_ WINTUN_ADAPTER_HANDLE Adapter, _Out_ NET_LUID *Luid);
 
 #ifdef __cplusplus
@@ -40,17 +34,17 @@ public:
     // Callback types
     using PacketCallback = std::function<void(const std::vector<uint8_t>&)>;
 
-    // Initialize the TUN interface with a specified device name
-    bool initialize(const std::string& deviceName);
+    // Initialize TUN adapter with a device name
+    bool initialize(const std::string&);
 
     // Start and stop packet processing
     bool startPacketProcessing();
     void stopPacketProcessing();
 
-    // Send a packet through the TUN interface
-    bool sendPacket(std::vector<uint8_t> packet);
+    // Add a packet to injection queue
+    bool sendPacket(std::vector<uint8_t>);
 
-    // Set callback for received packets
+    // Set callback for extracted packets
     void setPacketCallback(PacketCallback callback);
 
     // Check if the interface is running
@@ -59,6 +53,8 @@ public:
     // Close and clean up the TUN interface
     void close();
 
+    // Getter for adapter alias
+    // We use this to make sure we get the exact name of the adapter
     std::string getNarrowAlias() const;
 
 private:
@@ -95,23 +91,23 @@ private:
     WintunDeleteDriverFunc pWintunDeleteDriver = nullptr;
 
     // State management
-    std::atomic<bool> running_{false};
-    std::mutex packetQueueMutex_;
-    std::condition_variable packetCondition_;
-    std::queue<std::vector<uint8_t>> outgoingPackets_;
+    std::atomic<bool> running{false};
+    std::mutex packetQueueMutex;
+    std::condition_variable packetConditionVariable;
+    std::queue<std::vector<uint8_t>> outgoingPackets;
     
     // Thread for packet processing
-    std::thread receiveThread_;
-    std::thread sendThread_;
+    std::thread receiveThread;
+    std::thread sendThread;
     
     // Callback for received packets
-    PacketCallback packetCallback_;
+    PacketCallback packetCallback;
     
     // Interface management
-    bool loadWintunFunctions(HMODULE wintunModule);
+    bool loadWintunFunctions(HMODULE);
     void receiveThreadFunc();
     void sendThreadFunc();
     
     // System's network interfaces
-    HMODULE wintunModule_ = nullptr;
+    HMODULE wintunModule = nullptr;
 };

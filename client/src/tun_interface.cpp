@@ -13,11 +13,13 @@
 
 TunInterface::TunInterface() {}
 
-TunInterface::~TunInterface() {
+TunInterface::~TunInterface()
+{
     close();
 }
 
-bool TunInterface::loadWintunFunctions(HMODULE wintunModule) {
+bool TunInterface::loadWintunFunctions(HMODULE wintunModule)
+{
     pWintunOpenAdapter = 
         reinterpret_cast<WintunOpenAdapterFunc>(GetProcAddress(wintunModule, "WintunOpenAdapter"));
     pWintunCreateAdapter = 
@@ -40,7 +42,6 @@ bool TunInterface::loadWintunFunctions(HMODULE wintunModule) {
         reinterpret_cast<WintunGetAdapterLUIDFunc>(GetProcAddress(wintunModule, "WintunGetAdapterLUID"));
     pWintunGetReadWaitEvent =
         reinterpret_cast<WintunGetReadWaitEventFunc>(GetProcAddress(wintunModule, "WintunGetReadWaitEvent"));
-    // TODO: GET WintunDeleteAdapter
     pWintunDeleteDriver = 
         reinterpret_cast<WintunDeleteDriverFunc>(GetProcAddress(wintunModule, "WintunDeleteDriver"));
 
@@ -50,21 +51,23 @@ bool TunInterface::loadWintunFunctions(HMODULE wintunModule) {
            pWintunCloseAdapter && pWintunGetAdapterLUID && pWintunGetReadWaitEvent;
 }
 
-bool TunInterface::initialize(const std::string& deviceName) {
-    // Load wintun.dll dynamically
-    // Convert string to wide string for LoadLibraryW
+bool TunInterface::initialize(const std::string& deviceName)
+{
+    // Load wintun.dll
     std::wstring wideWintunPath = L"wintun.dll";
-    wintunModule_ = LoadLibraryW(wideWintunPath.c_str());
-    if (!wintunModule_) {
-        std::cerr << "Failed to load wintun.dll. Error: " << GetLastError() << std::endl;
+    wintunModule = LoadLibraryW(wideWintunPath.c_str());
+    if (!wintunModule)
+    {
+        SYSTEM_LOG_ERROR("[TunInterface] Failed to load wintun.dll. Error: {}", GetLastError());
         return false;
     }
 
     // Load functions
-    if (!loadWintunFunctions(wintunModule_)) {
-        std::cerr << "Failed to load Wintun functions. Error: " << GetLastError() << std::endl;
-        FreeLibrary(wintunModule_);
-        wintunModule_ = nullptr;
+    if (!loadWintunFunctions(wintunModule))
+    {
+        SYSTEM_LOG_ERROR("[TunInterface] Failed to load Wintun functions. Error: {}", GetLastError());
+        FreeLibrary(wintunModule);
+        wintunModule = nullptr;
         return false;
     }
 
@@ -73,9 +76,10 @@ bool TunInterface::initialize(const std::string& deviceName) {
 
     // Attempt to open an existing adapter first
     adapter = pWintunOpenAdapter(wideDeviceName.c_str());
-    if (!adapter) {
+    if (!adapter)
+    {
         DWORD error = GetLastError();
-        std::cerr << "Adapter not found (error: " << error << "); attempting to create a new one" << std::endl;
+        SYSTEM_LOG_ERROR("[TunInterface] Adapter not found (error: {}); attempting to create a new one", error);
         GUID guid;
 
         // TODO: CREATE GUID AS CONFIG ON INSTALLER, LOAD FROM CONFIG AFTER
@@ -84,9 +88,9 @@ bool TunInterface::initialize(const std::string& deviceName) {
         adapter = pWintunCreateAdapter(wideDeviceName.c_str(), L"Wintun", &WINTUN_ADAPTER_GUID);
 
         if (!adapter) {
-            std::cerr << "Failed to create WinTun adapter; please run as Administrator for setup. Error: " << GetLastError() << std::endl;
-            FreeLibrary(wintunModule_);
-            wintunModule_ = nullptr;
+            SYSTEM_LOG_ERROR("[TunInterface] Failed to create WinTun adapter; please run as Administrator for setup. Error: {}", GetLastError());
+            FreeLibrary(wintunModule);
+            wintunModule = nullptr;
             return false;
         }
     }
@@ -94,72 +98,83 @@ bool TunInterface::initialize(const std::string& deviceName) {
     // Start a Wintun session
     const DWORD WINTUN_RING_CAPACITY = 0x800000; // 8 MiB
     session = pWintunStartSession(adapter, WINTUN_RING_CAPACITY);
-    if (!session) {
-        std::cerr << "Failed to start Wintun session. Error: " << GetLastError() << std::endl;
+    if (!session)
+    {
+        SYSTEM_LOG_ERROR("[TunInterface] Failed to start Wintun session. Error: {}", GetLastError());
         pWintunCloseAdapter(adapter);
         adapter = nullptr;
-        FreeLibrary(wintunModule_);
-        wintunModule_ = nullptr;
+        FreeLibrary(wintunModule);
+        wintunModule = nullptr;
         return false;
     }
 
-    clog << "WinTun adapter initialized successfully." << std::endl;
+    SYSTEM_LOG_INFO("[TunInterface] WinTun adapter initialized successfully.");
     return true;
 }
 
-bool TunInterface::startPacketProcessing() {
-    if (!adapter || !session) {
-        std::cerr << "Adapter or session not initialized" << std::endl;
+bool TunInterface::startPacketProcessing()
+{
+    if (!adapter || !session)
+    {
+        SYSTEM_LOG_ERROR("[TunInterface] Adapter or session not initialized");
         return false;
     }
     
-    if (running_) {
-        std::cerr << "Packet processing already running" << std::endl;
+    if (running)
+    {
+        SYSTEM_LOG_ERROR("[TunInterface] Packet processing already running");
         return false;
     }
     
-    running_ = true;
+    running = true;
     
     // Start receive thread
-    receiveThread_ = std::thread(&TunInterface::receiveThreadFunc, this);
-    sendThread_ = std::thread(&TunInterface::sendThreadFunc, this);
+    receiveThread = std::thread(&TunInterface::receiveThreadFunc, this);
+    sendThread = std::thread(&TunInterface::sendThreadFunc, this);
     
-    clog << "Packet processing started" << std::endl;
+    SYSTEM_LOG_INFO("[TunInterface] Packet processing started");
     return true;
 }
 
-void TunInterface::stopPacketProcessing() {
-    running_ = false;
+void TunInterface::stopPacketProcessing()
+{
+    running = false;
     
     // Wait for threads to finish
-    if (receiveThread_.joinable()) {
-        receiveThread_.join();
+    if (receiveThread.joinable())
+    {
+        receiveThread.join();
     }
     
-    if (sendThread_.joinable()) {
-        sendThread_.join();
+    if (sendThread.joinable())
+    {
+        sendThread.join();
     }
 
-    // TODO: clear packet queue
-    outgoingPackets_ = {};
+    // In theory, it's possible this could cause problems :)
+    // Classic race condition moment
+    outgoingPackets = {};
     
-    clog << "Packet processing stopped" << std::endl;
+    SYSTEM_LOG_INFO("[TunInterface] Packet processing stopped");
 }
 
 void TunInterface::receiveThreadFunc() {
     // Get Wintun's read-wait event handle
     HANDLE readWaitEvent = pWintunGetReadWaitEvent(session);
-    if (!readWaitEvent) {
-        std::cerr << "Failed to get Wintun read wait event" << std::endl;
+    if (!readWaitEvent)
+    {
+        NETWORK_LOG_ERROR("[TunInterface] Failed to get Wintun read wait event");
         return;
     }
     
-    while (running_) {
+    while (running)
+    {
         DWORD packetSize;
         WINTUN_PACKET* packet = pWintunReceivePacket(session, &packetSize);
         
-        if (packet) {
-            // Copy packet data - in Wintun, the packet pointer is the data
+        if (packet)
+        {
+            // Copy packet data, cast to uint8_t* to copy to vector
             const uint8_t* packetDataPtr = reinterpret_cast<const uint8_t*>(packet);
             std::vector<uint8_t> packetData(packetDataPtr, packetDataPtr + packetSize);
             
@@ -167,59 +182,63 @@ void TunInterface::receiveThreadFunc() {
             pWintunReleaseReceivePacket(session, packet);
             
             // Process the packet
-            if (packetCallback_) {
-                packetCallback_(packetData);
+            if (packetCallback)
+            {
+                packetCallback(packetData);
             }
 
             continue;
         }
         
-        // Wait for signal from wintun or timeout
+        // Wait for "packet ready" event signal from wintun or timeout via Windows API
+        // In high-level terms, this is like waiting on a kernel-level condition variable / signal
         DWORD waitResult = WaitForSingleObject(readWaitEvent, 5); // 5ms timeout for gaming responsiveness
         
-        if (waitResult == WAIT_TIMEOUT) {
-            // Timeout is normal, just continue the loop
+        if (waitResult == WAIT_TIMEOUT)
+        {
+            // Signal to continue the loop
             continue;
-        } else if (waitResult != WAIT_OBJECT_0) {
+        }
+        else if (waitResult != WAIT_OBJECT_0)
+        {
             // Error occurred
-            if (running_) {
-                NETWORK_LOG_ERROR("[TunInterface] WaitForSingleObject failed: {}", GetLastError());
-            }
+            if (running)
+                SYSTEM_LOG_ERROR("[TunInterface] WaitForSingleObject failed: {}", GetLastError());
             break;
         }
-        // Event was signaled, loop back to try receiving packets
     }
 }
 
-void TunInterface::sendThreadFunc() {
-    while (running_) {
+void TunInterface::sendThreadFunc()
+{
+    while (running)
+    {
         std::vector<uint8_t> packetData;
         
-        // Wait for packet or timeout - increased timeout for better efficiency
+        // Wait for packet or timeout
         {
-            std::unique_lock<std::mutex> lock(packetQueueMutex_);
+            std::unique_lock<std::mutex> lock(packetQueueMutex);
             
-            if (packetCondition_.wait_for(lock, std::chrono::milliseconds(1), 
-                [this] { return !outgoingPackets_.empty() || !running_; })) 
+            if (packetConditionVariable.wait_for(lock, std::chrono::milliseconds(1), 
+                [this] { return !outgoingPackets.empty() || !running; })) 
             {
                 // Got signaled - packet available or shutting down
-                if (!running_) break;
+                if (!running) break;
                 
-                if (!outgoingPackets_.empty()) {
-                    packetData = std::move(outgoingPackets_.front());
-                    outgoingPackets_.pop();
+                if (!outgoingPackets.empty()) {
+                    packetData = std::move(outgoingPackets.front());
+                    outgoingPackets.pop();
                 }
             }
-            // If timeout occurred, continue loop (keeps thread responsive)
         }
         
-        if (!packetData.empty()) {
+        if (!packetData.empty())
+        {
             // Allocate a packet
             WINTUN_PACKET* packet = pWintunAllocateSendPacket(session, packetData.size());
             
             if (packet) {
-                // Copy the data - in WireGuard's Wintun, the packet pointer is the data
-                // Use memcpy with proper casting for C++ compliance
+                // Copy the data, cast to void* to copy to packet
                 memcpy(reinterpret_cast<void*>(packet), 
                        reinterpret_cast<const void*>(packetData.data()), 
                        packetData.size());
@@ -231,68 +250,80 @@ void TunInterface::sendThreadFunc() {
     }
 }
 
-bool TunInterface::sendPacket(std::vector<uint8_t> packet) {
-    if (!running_) {
-        std::cerr << "Packet processing not running" << std::endl;
+bool TunInterface::sendPacket(std::vector<uint8_t> packet)
+{
+    if (!running)
+    {
+        SYSTEM_LOG_ERROR("[TunInterface] Packet processing not running");
         return false;
     }
     
     // Add the packet to the queue and notify the send thread
     {
-        std::lock_guard<std::mutex> lock(packetQueueMutex_);
-        outgoingPackets_.push(std::move(packet));
+        std::lock_guard<std::mutex> lock(packetQueueMutex);
+        outgoingPackets.push(std::move(packet));
     }
-    packetCondition_.notify_one();
+    packetConditionVariable.notify_one();
     
     return true;
 }
 
-void TunInterface::setPacketCallback(PacketCallback callback) {
-    packetCallback_ = std::move(callback);
+void TunInterface::setPacketCallback(PacketCallback callback)
+{
+    packetCallback = std::move(callback);
 }
 
-bool TunInterface::isRunning() const {
-    return running_;
+bool TunInterface::isRunning() const
+{
+    return running;
 }
 
-void TunInterface::close() {
+void TunInterface::close()
+{
     // Stop packet processing
-    if (running_) {
+    if (running)
+    {
         stopPacketProcessing();
     }
     
     // End session
-    if (session) {
+    if (session)
+    {
         pWintunEndSession(session);
         session = nullptr;
     }
     
     // Close adapter
-    if (adapter) {
+    if (adapter)
+    {
         pWintunCloseAdapter(adapter);
         adapter = nullptr;
     }
     
     // Unload library
-    if (wintunModule_) {
-        FreeLibrary(wintunModule_);
-        wintunModule_ = nullptr;
+    if (wintunModule)
+    {
+        FreeLibrary(wintunModule);
+        wintunModule = nullptr;
     }
     
-    clog << "TUN interface closed" << std::endl;
+    SYSTEM_LOG_INFO("[TunInterface] TUN interface closed");
 }
 
-std::string TunInterface::getNarrowAlias() const {
+std::string TunInterface::getNarrowAlias() const
+{
     NET_LUID adapterLuid;
-    if (!pWintunGetAdapterLUID(adapter, &adapterLuid)) {
-        std::cerr << "Failed to get adapter LUID. Error: " << GetLastError() << std::endl;
+    if (!pWintunGetAdapterLUID(adapter, &adapterLuid))
+    {
+        SYSTEM_LOG_ERROR("[TunInterface] Failed to get adapter LUID. Error: {}", GetLastError());
         return "";
     }
 
     // Get interface alias (friendly name) from LUID
     WCHAR interfaceAlias[IF_MAX_STRING_SIZE + 1] = { 0 };
-    if (ConvertInterfaceLuidToAlias(&adapterLuid, interfaceAlias, IF_MAX_STRING_SIZE) != NO_ERROR) {
-        std::cerr << "Failed to get interface alias from LUID. Error: " << GetLastError() << std::endl;
+    if (ConvertInterfaceLuidToAlias(&adapterLuid, interfaceAlias, IF_MAX_STRING_SIZE) != NO_ERROR)
+    {
+        SYSTEM_LOG_ERROR("[TunInterface] Failed to get interface alias from LUID. Error: {}", GetLastError());
         return "";
     }
 

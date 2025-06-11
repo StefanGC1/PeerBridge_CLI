@@ -15,15 +15,15 @@ public:
     // Get public IP and port
     std::optional<PublicAddress> discoverPublicAddress();
     
-    // Set custom STUN server
+    // Set STUN server (possible custom configuration)
     void setStunServer(const std::string& server, const std::string& port = "19302");
 
     std::unique_ptr<boost::asio::ip::udp::socket> getSocket();
     boost::asio::io_context& getContext();
 
 private:
-    std::string stun_server_;
-    std::string stun_port_;
-    std::unique_ptr<boost::asio::ip::udp::socket> socket_;
-    boost::asio::io_context io_context_;
+    std::string stunServer;
+    std::string stunPort;
+    std::unique_ptr<boost::asio::ip::udp::socket> scoket;
+    boost::asio::io_context ioContext;
 };

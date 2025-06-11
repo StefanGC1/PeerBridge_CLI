@@ -16,20 +16,23 @@
 // Forward declarations
 struct IPPacket;
 
-class P2PSystem {
+class P2PSystem
+{
 public:
     P2PSystem();
     ~P2PSystem();
     
     // Initialization
-    bool initialize(const std::string& server_url, const std::string& username, int local_port = 0);
+    // TODO: REFACTORIZE FOR *1
+    bool initialize(const std::string&, const std::string&, int = 0);
     
-    // Connection management
-    bool connectToPeer(const std::string& peer_username);
+    // Connection
+    bool connectToPeer(const std::string&);
     
-    // New separated disconnect functions
-    void stopConnection();   // Stop connection but keep system running
-    void shutdown();         // Complete system shutdown
+    // Disconnect and complete shutdown
+    // TODO: FOR *1, maybe make a peer-based stopConnection
+    void stopConnection();
+    void shutdown();
     
     // Network interface
     bool startNetworkInterface();
@@ -38,73 +41,67 @@ public:
     // Status
     bool isConnected() const;
     bool isRunning() const;
-    bool isHost() const;
-
+    bool getIsHost() const;
     void setRunning();
     
     // Connection request handling
+    // TODO: REMOVE FOR *1
     void acceptIncomingRequest();
     void rejectIncomingRequest();
     
     // Connection monitoring
     void monitorLoop();
-    void handleNetworkEvent(const NetworkEventData& event);
-    void performBasicHealthCheck();
+    void handleNetworkEvent(const NetworkEventData&);
     
 private:
     // Network discovery
     bool discoverPublicAddress();
     
     // Handler methods
-    void handleConnectionRequest(const std::string& from);
-    void handlePeerInfo(const std::string& username, const std::string& ip, int port);
-    void handleConnectionInit(const std::string& username, const std::string& ip, int port);
-    void handleNetworkData(std::vector<uint8_t> data);
-    void handlePacketFromTun(const std::vector<uint8_t>& packet);
+    void handleConnectionRequest(const std::string&);
+    void handlePeerInfo(const std::string&, const std::string&, int);
+    void handleConnectionInit(const std::string&, const std::string&, int);
+    void handleNetworkData(std::vector<uint8_t>);
+    void handlePacketFromTun(const std::vector<uint8_t>&);
     
     // IP helpers
     void assignIPAddresses();
     
     // Packet analysis and forwarding
-    bool forwardPacketToPeer(const std::vector<uint8_t>& packet);
-    bool deliverPacketToTun(std::vector<uint8_t> packet);
-    
-    // Members
-    std::string username_;
-    std::string pending_request_from_;
-    std::atomic<bool> running_;
-    std::atomic<bool> is_host_;
-    std::mutex packet_mutex_;
-    
+    bool forwardPacketToPeer(const std::vector<uint8_t>&);
+    bool deliverPacketToTun(std::vector<uint8_t>);
+
     // Virtual network configuration
     static constexpr const char* VIRTUAL_NETWORK = "10.0.0.0";
     static constexpr const char* VIRTUAL_NETMASK = "255.255.255.0";
     static constexpr const char* HOST_IP = "10.0.0.1";
     static constexpr const char* CLIENT_IP = "10.0.0.2";
+
+    // Data
+    std::string username;
+    std::string pendingRequestFrom;
+    std::atomic<bool> running;
+    std::atomic<bool> isHost;
     
-    std::string local_virtual_ip_;
-    std::string peer_virtual_ip_;
-    
+    std::string localVirtualIp;
+    // TODO: REFACTORIZE FOR *1, KEEP virtual_ip -> public_ip map
+    std::string peerVirtualIp;
+
+    std::string publicIp;
+    int publicPort;
+
+    std::string peerUsername;
+    std::string peerIp;
+    int peerPort;
+
     // State management
-    std::shared_ptr<SystemStateManager> state_manager_;
-    std::thread monitor_thread_;
+    std::shared_ptr<SystemStateManager> stateManager;
+    std::thread monitorThread;
     
     // Components
     NetworkConfigManager networkConfigManager;
-    SignalingClient signaling_;
-    StunClient stun_;
-    std::unique_ptr<UDPNetwork> network_;
-    std::unique_ptr<TunInterface> tun_;
-    
-    // P2P network thread
-    std::thread packet_handling_thread_;
-    
-    // Public address
-    std::string public_ip_;
-    int public_port_;
-    
-    // Peer info
-    std::string peer_username_;
-    std::string peer_ip_;
-    int peer_port_;
+    SignalingClient signalingClient;
+    StunClient stunService;
+    std::unique_ptr<UDPNetwork> networkModule;
+    std::unique_ptr<TunInterface> tunInterface;
 }; 

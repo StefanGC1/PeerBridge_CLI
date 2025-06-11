@@ -122,6 +122,7 @@ quill::PatternFormatterOptions shortLogFormat()
         "%(log_level) %(message)"
     };
 
+    // Grab this macro set by CMake, ignore external linter errors here
     std::string prefix = SOURCE_ROOT_DIR;
     cmakeMoment(prefix);
     std::cout << prefix << std::endl;

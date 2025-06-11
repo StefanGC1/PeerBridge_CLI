@@ -12,21 +12,22 @@
 // Global variables
 static std::atomic<bool> g_running = true;
 static std::mutex g_input_mutex;
-static std::unique_ptr<P2PSystem> g_system;
+static std::unique_ptr<P2PSystem> p2pSystem;
 
 // Signal handler for graceful shutdown
-void signal_handler(int signal) {
+void signalHandler(int signal)
+{
     g_running = false;
 }
 
-static std::string stacktrace_to_string()
+static std::string stackTraceToString()
 {
     std::ostringstream oss;
     oss << boost::stacktrace::stacktrace();
     return oss.str();
 }
 
-static void on_terminate()
+static void onTerminate()
 {
     // if there’s an active exception, try to get its what()
     if (auto eptr = std::current_exception())
@@ -45,25 +46,20 @@ static void on_terminate()
     {
         SYSTEM_LOG_ERROR("Terminate called without an exception");
     }
-    SYSTEM_LOG_ERROR("Stack trace:\n{}", stacktrace_to_string());
+    SYSTEM_LOG_ERROR("Stack trace:\n{}", stackTraceToString());
     std::_Exit(EXIT_FAILURE);  // immediate exit
 }
 
 // Called on fatal signals
-static void on_signal(int sig)
+static void onSignal(int sig)
 {
     SYSTEM_LOG_ERROR("Received signal: {}", sig);
-    SYSTEM_LOG_ERROR("Stack trace:\n{}", stacktrace_to_string());
+    SYSTEM_LOG_ERROR("Stack trace:\n{}", stackTraceToString());
     std::_Exit(EXIT_FAILURE);
 }
 
-void print_usage() {
-    SYSTEM_LOG_INFO("Usage: p2p_net <username> [peer_username]");
-    SYSTEM_LOG_INFO("  username: Your username for the P2P connection");
-    SYSTEM_LOG_INFO("  peer_username: (Optional) Username of peer to connect to");
-}
-
-void input_thread_func() {
+void inputThreadFunc()
+{
     while (g_running) {
         std::string line;
         {
@@ -92,29 +88,29 @@ void input_thread_func() {
         }
         else if (line.substr(0, 9) == "/connect ") {
             std::string peer = line.substr(9);
-            g_system->connectToPeer(peer);
+            p2pSystem->connectToPeer(peer);
         }
         else if (line == "/disconnect") {
-            g_system->stopConnection();
+            p2pSystem->stopConnection();
         }
         else if (line == "/accept") {
-            g_system->acceptIncomingRequest();
+            p2pSystem->acceptIncomingRequest();
         }
         else if (line == "/reject") {
-            g_system->rejectIncomingRequest();
+            p2pSystem->rejectIncomingRequest();
         }
         else if (line == "/status") {
-            if (g_system->isConnected()) {
+            if (p2pSystem->isConnected()) {
                 SYSTEM_LOG_INFO("[Status] Connected");
-                SYSTEM_LOG_INFO("  Role: {}", (g_system->isHost() ? "Host" : "Client"));
+                SYSTEM_LOG_INFO("  Role: {}", (p2pSystem->getIsHost() ? "Host" : "Client"));
             } else {
                 SYSTEM_LOG_INFO("[Status] Not connected");
             }
         }
         else if (line == "/ip") {
-            if (g_system->isConnected()) {
-                SYSTEM_LOG_INFO("[IP] Your virtual IP: {}", (g_system->isHost() ? "10.0.0.1" : "10.0.0.2"));
-                SYSTEM_LOG_INFO("[IP] Peer virtual IP: {}", (g_system->isHost() ? "10.0.0.2" : "10.0.0.1"));
+            if (p2pSystem->isConnected()) {
+                SYSTEM_LOG_INFO("[IP] Your virtual IP: {}", (p2pSystem->getIsHost() ? "10.0.0.1" : "10.0.0.2"));
+                SYSTEM_LOG_INFO("[IP] Peer virtual IP: {}", (p2pSystem->getIsHost() ? "10.0.0.2" : "10.0.0.1"));
             } else {
                 SYSTEM_LOG_INFO("[IP] Not connected");
             }
@@ -122,37 +118,40 @@ void input_thread_func() {
     }
 }
 
-int main(int argc, char* argv[]) {
+int main(int argc, char* argv[])
+{
+    // Init logging
+    initLogging();
     // Setup signal handlers
-    std::set_terminate(on_terminate);
+    std::set_terminate(onTerminate);
 
-    signal(SIGINT, signal_handler);
-    std::signal(SIGSEGV, on_signal);
-    std::signal(SIGABRT, on_signal);
-    std::signal(SIGFPE, on_signal);
-    std::signal(SIGILL, on_signal);
-    std::signal(SIGTERM, on_signal);
+    signal(SIGINT, signalHandler);
+    std::signal(SIGSEGV, onSignal);
+    std::signal(SIGABRT, onSignal);
+    std::signal(SIGFPE, onSignal);
+    std::signal(SIGILL, onSignal);
+    std::signal(SIGTERM, onSignal);
     
     // TODO: Disable network traffic logging in prod
-    initLogging();
     setShouldLogTraffic(true);
     NETWORK_TRAFFIC_LOG("TEST");
 
     std::string username;
     SYSTEM_LOG_INFO("Enter your username: ");
     std::getline(std::cin, username);
-    if (username.empty()) {
+    if (username.empty())
+    {
         std::cerr << "Username cannot be empty. Exiting." << std::endl;
         return 1;
     }
-    std::string peer_username = "";
     
-    const std::string server_url = "wss://sector-classic-ear-ecommerce.trycloudflare.com";
-    int local_port = 0; // Let system automatically choose a port
-    g_system = std::make_unique<P2PSystem>();
+    const std::string serverUrl = "wss://sector-classic-ear-ecommerce.trycloudflare.com";
+    int localPort = 0; // Let system automatically choose a port
+    p2pSystem = std::make_unique<P2PSystem>();
     
     // Initialize the application
-    if (!g_system->initialize(server_url, username, local_port)) {
+    if (!p2pSystem->initialize(serverUrl, username, localPort))
+    {
         SYSTEM_LOG_ERROR("Failed to initialize the application. Exiting.");
         return 1;
     }
@@ -161,19 +160,21 @@ int main(int argc, char* argv[]) {
     SYSTEM_LOG_INFO("Type /help for available commands.");
     
     // Start input thread
-    std::thread input_thread(input_thread_func);
+    std::thread inputThread(inputThreadFunc);
     
     // Main loop (status updates, etc.)
-    while (g_running) {
+    while (g_running)
+    {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
     
     // Cleanup - use full shutdown at program exit
-    g_system->shutdown();
+    p2pSystem->shutdown();
     
     // Wait for input thread to finish
-    if (input_thread.joinable()) {
-        input_thread.join();
+    if (inputThread.joinable())
+    {
+        inputThread.join();
     }
     
     SYSTEM_LOG_INFO("Application exiting. Goodbye!");

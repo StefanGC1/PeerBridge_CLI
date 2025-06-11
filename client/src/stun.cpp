@@ -1,16 +1,18 @@
 #include "stun.hpp"
+#include "logger.hpp"
 #include <iostream>
 #include <sodium/randombytes.h>
 
 StunClient::StunClient(const std::string& server, const std::string& port)
-    : stun_server_(server), stun_port_(port)
-    , io_context_()
+    : stunServer(server), stunPort(port)
+    , ioContext()
 {
 }
 
-void StunClient::setStunServer(const std::string& server, const std::string& port) {
-    stun_server_ = server;
-    stun_port_ = port;
+void StunClient::setStunServer(const std::string& server, const std::string& port)
+{
+    stunServer = server;
+    stunPort = port;
 }
 
 std::optional<PublicAddress> StunClient::discoverPublicAddress()
@@ -18,11 +20,12 @@ std::optional<PublicAddress> StunClient::discoverPublicAddress()
     using boost::asio::ip::udp;
     try
     {
-        socket_ = std::make_unique<udp::socket>(io_context_);
+        SYSTEM_LOG_INFO("[STUN] Discovering public address");
+        scoket = std::make_unique<udp::socket>(ioContext);
         // --- Setup socket, build and send STUN binding request --- //
-        udp::resolver resolver(io_context_);
-        udp::endpoint stun_endpoint = *resolver.resolve(stun_server_, stun_port_).begin();
-        socket_->open(udp::v4());
+        udp::resolver resolver(ioContext);
+        udp::endpoint stun_endpoint = *resolver.resolve(stunServer, stunPort).begin();
+        scoket->open(udp::v4());
 
         // Build STUN binding request according to RFC 5389 protocol
         std::array<uint8_t, 20> request{};
@@ -32,15 +35,15 @@ std::optional<PublicAddress> StunClient::discoverPublicAddress()
         randombytes_buf(&request[8], 12); // Bytes 8..19 Transaction ID
 
         // Send request
-        socket_->send_to(boost::asio::buffer(request), stun_endpoint);
+        scoket->send_to(boost::asio::buffer(request), stun_endpoint);
 
         // Receive response
         std::array<uint8_t, 512> response{};
         udp::endpoint sender_endpoint;
         
         // Set timeout
-        socket_->non_blocking(true);
-        boost::asio::steady_timer timer(io_context_);
+        scoket->non_blocking(true);
+        boost::asio::steady_timer timer(ioContext);
         timer.expires_after(std::chrono::seconds(5));
         
         boost::system::error_code ec;
@@ -49,13 +52,13 @@ std::optional<PublicAddress> StunClient::discoverPublicAddress()
         bool received = false;
 
         // Async receive with timeout
-        socket_->async_receive_from(
+        scoket->async_receive_from(
             boost::asio::buffer(response), sender_endpoint,
             [&](const boost::system::error_code& error, std::size_t bytes_recvd) {
                 if (!error) {
                     len = bytes_recvd;
                     received = true;
-                    timer.cancel(); // cancel the timer if we received data
+                    timer.cancel(); // Cancel the timer if we received data
                 }
             }
         );
@@ -63,37 +66,37 @@ std::optional<PublicAddress> StunClient::discoverPublicAddress()
         // Set up async timeout
         timer.async_wait([&](const boost::system::error_code& error) {
             if (!error) {
-                socket_->cancel(); // cancel receive if timeout occurs
+                scoket->cancel(); // Cancel receive if timeout
             }
         });
         
         // Run IO until one of them finishes
-        io_context_.run();
+        ioContext.run();
 
         if (!received) {
-            std::cerr << "[STUN] Response timeout or error.\n";
+            SYSTEM_LOG_ERROR("[STUN] Response timeout or error");
             return std::nullopt;
         }
 
-        // --- Validate STUN Response --- //
+        /* --- Validate STUN Response --- */
 
         // Check length is not smaller than header size
         if (len < 20) {
-            std::cerr << "[STUN] Response too short.\n";
+            SYSTEM_LOG_ERROR("[STUN] Response too short.");
             return std::nullopt;
         }
 
         // Check length against reported message length
         uint16_t msg_length = response[2] << 8 | response[3];
         if (20 + msg_length > len) {
-            std::cerr << "[STUN] Message length exceeds received size.\n";
+            SYSTEM_LOG_ERROR("[STUN] Message length exceeds received size.");
             return std::nullopt;
         }
 
         // Check message type is binding success
         uint16_t msg_type = response[0] << 8 | response[1];
         if (msg_type != 0x0101) { // 0x0101 = Binding success response
-            std::cerr << "[STUN] Not a Binding Success Response.\n";
+            SYSTEM_LOG_ERROR("[STUN] Not a Binding Success Response.");
             return std::nullopt;
         }
 
@@ -124,7 +127,7 @@ std::optional<PublicAddress> StunClient::discoverPublicAddress()
             i += attr_len;
         }
     } catch (std::exception& e) {
-        std::cerr << "[STUN] Failed: " << e.what() << std::endl;
+        SYSTEM_LOG_ERROR("[STUN] Failed: {}", e.what());
     }
 
     return std::nullopt;
@@ -132,10 +135,10 @@ std::optional<PublicAddress> StunClient::discoverPublicAddress()
 
 std::unique_ptr<boost::asio::ip::udp::socket> StunClient::getSocket()
 {
-    return std::move(socket_);
+    return std::move(scoket);
 }
 
 boost::asio::io_context& StunClient::getContext()
 {
-    return io_context_;
+    return ioContext;
 }

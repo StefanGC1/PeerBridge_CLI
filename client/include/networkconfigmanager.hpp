@@ -56,6 +56,7 @@ public:
     void removeFirewall();
 
     void setNarrowAlias(const std::string&);
+
 private:
     RouteConfigApproach routeApproach = RouteConfigApproach::GENERIC_ROUTE;
     std::string narrowAlias;

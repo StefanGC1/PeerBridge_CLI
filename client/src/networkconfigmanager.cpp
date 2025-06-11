@@ -43,14 +43,7 @@ bool NetworkConfigManager::setupRouting(const ConnectionConfig& connectionConfig
 
     // Count mask bits for CIDR notation
     uint32_t mask = utils::ipToUint32(NetworkConstants::NET_MASK);
-
     int maskBits = __builtin_popcount(mask);
-    // UNCOMMENT IF BREAKS
-    // uint32_t tempMask = mask;
-    // while (tempMask) {
-    //     maskBits += (tempMask & 1);
-    //     tempMask >>= 1;
-    // }
 
     SYSTEM_LOG_INFO("[Network Config Manager] Setting up routing on private IP Space: {}", networkAddr);
     SYSTEM_LOG_INFO("[Netowrk Config Manager] Setting self (static) ip as: {}", selfVirtualIp);
@@ -85,7 +78,8 @@ bool NetworkConfigManager::setupRouting(const ConnectionConfig& connectionConfig
         // This ensures at least basic connectivity even if subnet routing fails
         command.str("");
         
-        // Determine peer IP based on local IP
+        // TODO: REFACTORIZE FOR *1 FOR MULTIPLE PEERS
+        // Get peer IP
         std::string peerIP = connectionConfig.peerVirtualIp;
         
         command << "netsh interface ipv4 add route " 
@@ -118,10 +112,10 @@ bool NetworkConfigManager::setupRouting(const ConnectionConfig& connectionConfig
             << " interface=\"" << narrowAlias << "\" "
             << "metric=1";
     if (!executeNetshCommand(command.str())) {
-        SYSTEM_LOG_ERROR("[Network Config Manager] Failed to add route for multicast traffic");
+        SYSTEM_LOG_WARNING("[Network Config Manager] Failed to add route for multicast traffic. Route may already exist, or discovery may be limited.");
     }
     
-    SYSTEM_LOG_WARNING("[Network Config Manager] Routing configured for virtual network");
+    SYSTEM_LOG_INFO("[Network Config Manager] Routing configured for virtual network");
     return true;
 }
 
@@ -350,8 +344,7 @@ bool NetworkConfigManager::executeNetshCommand(const std::string& command) {
     ZeroMemory(&si, sizeof(si));
     si.cb = sizeof(si);
     ZeroMemory(&pi, sizeof(pi));
-    
-    // Add "cmd /c " prefix to the command to execute it via cmd
+
     std::string fullCommand = "cmd /c " + command;
     
     SYSTEM_LOG_INFO("[Netsh] Executing: {}", fullCommand);
@@ -361,7 +354,7 @@ bool NetworkConfigManager::executeNetshCommand(const std::string& command) {
     std::vector<wchar_t> wideCommand(size);
     MultiByteToWideChar(CP_UTF8, 0, fullCommand.c_str(), -1, wideCommand.data(), size);
     
-    // Create the process (use CreateProcessW for wide strings)
+    // Create the process
     if (!CreateProcessW(NULL, wideCommand.data(), NULL, NULL, FALSE, 
                       CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
         SYSTEM_LOG_WARNING("[Netsh] Failed to execute command: {}", command);
