@@ -1,5 +1,5 @@
 #include "networking.hpp"
-#include "logger.hpp"
+#include "Logger.hpp"
 #include <iostream>
 #include <chrono>
 #include <random>

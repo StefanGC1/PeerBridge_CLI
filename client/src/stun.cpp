@@ -1,5 +1,5 @@
-#include "stun.hpp"
-#include "logger.hpp"
+#include "Stun.hpp"
+#include "Logger.hpp"
 #include <iostream>
 #include <sodium/randombytes.h>
 

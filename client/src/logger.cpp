@@ -1,4 +1,4 @@
-#include "logger.hpp"
+#include "Logger.hpp"
 #include <chrono>
 #include <algorithm>
 #include <regex>

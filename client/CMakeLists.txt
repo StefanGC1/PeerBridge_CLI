@@ -31,15 +31,15 @@ link_directories(${IXWS_ROOT}/lib)
 include_directories("${CMAKE_SOURCE_DIR}/include")
 set(SOURCES
     src/main.cpp
-    src/crypto.cpp
+    src/Crypto.cpp
     src/networking.cpp
     src/signaling.cpp
-    src/stun.cpp
-    src/p2p_system.cpp
-    src/tun_interface.cpp
-    src/logger.cpp
-    src/networkconfigmanager.cpp
-    src/systemstatemanager.cpp
+    src/Stun.cpp
+    src/P2PSystem.cpp
+    src/TUNInterface.cpp
+    src/Logger.cpp
+    src/NetworkConfigManager.cpp
+    src/SystemStateManager.cpp
 )
 
 # Create executable

@@ -1,4 +1,4 @@
-#include "crypto.hpp"
+#include "Crypto.hpp"
 #include <sodium.h>
 #include <stdexcept>
 

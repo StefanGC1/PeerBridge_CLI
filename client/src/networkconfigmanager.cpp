@@ -1,6 +1,6 @@
-#include "utils.hpp"
+#include "Utils.hpp"
 #include "networkconfigmanager.hpp"
-#include "logger.hpp"
+#include "Logger.hpp"
 
 #pragma comment(lib, "iphlpapi.lib")
 

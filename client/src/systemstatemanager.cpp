@@ -1,5 +1,5 @@
-#include "systemstatemanager.hpp"
-#include "logger.hpp"
+#include "SystemStateManager.hpp"
+#include "Logger.hpp"
 
 SystemStateManager::SystemStateManager() : currentState(SystemState::IDLE) {}
 

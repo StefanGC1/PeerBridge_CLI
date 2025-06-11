@@ -1,5 +1,5 @@
-#include "tun_interface.hpp"
-#include "logger.hpp"
+#include "TUNInterface.hpp"
+#include "Logger.hpp"
 #include <Windows.h>
 #include <iostream>
 #include <string>

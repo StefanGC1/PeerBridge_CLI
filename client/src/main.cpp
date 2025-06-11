@@ -1,5 +1,5 @@
-#include "p2p_system.hpp"
-#include "logger.hpp"
+#include "P2PSystem.hpp"
+#include "Logger.hpp"
 #include <iostream>
 #include <string>
 #include <thread>

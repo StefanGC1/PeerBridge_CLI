@@ -1,10 +1,10 @@
 #pragma once
 #include "signaling.hpp"
-#include "stun.hpp"
+#include "Stun.hpp"
 #include "networking.hpp"
-#include "tun_interface.hpp"
-#include "networkconfigmanager.hpp"
-#include "systemstatemanager.hpp"
+#include "TUNInterface.hpp"
+#include "NetworkConfigManager.hpp"
+#include "SystemStateManager.hpp"
 #include <string>
 #include <atomic>
 #include <thread>

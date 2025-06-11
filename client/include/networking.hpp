@@ -12,7 +12,7 @@
 #include <boost/asio.hpp>
 #include <boost/asio/executor_work_guard.hpp>
 #include <boost/asio/steady_timer.hpp>
-#include "systemstatemanager.hpp"
+#include "SystemStateManager.hpp"
 
 class UDPNetwork {
 public:
