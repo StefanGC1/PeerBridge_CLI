@@ -32,7 +32,7 @@ include_directories("${CMAKE_SOURCE_DIR}/include")
 set(SOURCES
     src/main.cpp
     src/Crypto.cpp
-    src/networking.cpp
+    src/NetworkingModule.cpp
     src/signaling.cpp
     src/Stun.cpp
     src/P2PSystem.cpp

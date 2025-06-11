@@ -1,7 +1,7 @@
 #pragma once
 #include "signaling.hpp"
 #include "Stun.hpp"
-#include "networking.hpp"
+#include "NetworkingModule.hpp"
 #include "TUNInterface.hpp"
 #include "NetworkConfigManager.hpp"
 #include "SystemStateManager.hpp"

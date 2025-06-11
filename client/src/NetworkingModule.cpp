@@ -1,4 +1,4 @@
-#include "networking.hpp"
+#include "NetworkingModule.hpp"
 #include "Logger.hpp"
 #include <iostream>
 #include <chrono>
@@ -163,14 +163,15 @@ void UDPNetwork::sendHolePunchPacket()
 
 void UDPNetwork::checkAllConnections()
 {
-    if (peerConnection.hasTimedOut(10))
+    if (peerConnection.hasTimedOut(20))
     {
+        // Time out peer after 20 seconds of inactivity
         auto last_activity = peerConnection.getLastActivity();
         auto now = std::chrono::steady_clock::now();
         auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - last_activity).count();
         
-        SYSTEM_LOG_ERROR("[Network] Connection timeout. No packets received for {} seconds (threshold: 10s).", elapsed);
-        NETWORK_LOG_ERROR("[Network] Connection timeout. No packets received for {} seconds (threshold: 10s).", elapsed);
+        SYSTEM_LOG_ERROR("[Network] Connection timeout. No packets received for {} seconds (threshold: 20s).", elapsed);
+        NETWORK_LOG_ERROR("[Network] Connection timeout. No packets received for {} seconds (threshold: 20s).", elapsed);
         
         // Mark as disconnected
         peerConnection.setConnected(false);
